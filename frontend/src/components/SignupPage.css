@@ -1,0 +1,54 @@
+/* Basic styles for SignupPage (keeps simple, similar to LoginPage) */
+.signup-page{ min-height:100vh; background:linear-gradient(180deg,#f8faf9,#e8f5ec); display:flex; align-items:center; justify-content:center; padding:24px }
+.signup-wrapper{ width:100%; max-width:520px }
+.brand{ font-size:18px; margin-bottom:4px; text-align:center; letter-spacing:1px }
+.muted{ color:#6b7280; text-align:center }
+.accent{ color:var(--accent) }
+.small{ font-size:13px }
+.progress-block{ margin-bottom:20px }
+.card{ background:#fff; border-radius:28px; padding:28px; box-shadow:0 18px 40px rgba(16,24,40,0.08) }
+.form{ display:flex; flex-direction:column; gap:14px }
+.relative{ position:relative }
+.eye-btn{ position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:18px }
+.pw-req{ margin-top:10px; background:#fbfdfb; padding:12px; border-radius:10px; border:1px solid #e9efe9 }
+.pw-row{ display:flex; gap:8px; align-items:center; font-size:13px }
+.pw-row .icon{ width:16px; height:16px; color:#9ca3af }
+.pw-row .icon.ok{ color:var(--accent) }
+.error{ color:#ef4444; font-size:13px }
+.radio-row{ display:flex; gap:8px; align-items:center; padding:12px; background:#fbfbfb; border-radius:10px; border:1px solid #eef2ef }
+.nav-row{ display:flex; gap:12px; margin-top:16px }
+.btn-primary{ flex:1; height:52px; border-radius:999px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; border:none; cursor:pointer; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px }
+.btn-outline{ flex:1; height:52px; border-radius:999px; background:#fff; border:1px solid #e5e7eb; color:#374151 }
+.terms-label{ display:flex; gap:8px; align-items:flex-start }
+.link{ background:none; border:none; color:var(--accent); cursor:pointer }
+
+/* Inputs inside card: make them visually like the screenshot */
+.card input[type="text"], .card input[type="email"], .card input[type="password"], .card input[type="number"]{
+	height:48px; border-radius:12px; padding:12px 14px; border:1px solid #e6eef0; background:#fbfdfe; box-shadow:none; outline:none; font-size:14px; color:#1f2937; width:100%; box-sizing:border-box; display:block;
+}
+.card input::placeholder{ color:#9aa3a3 }
+.card input:focus{ box-shadow:0 6px 20px rgba(52,199,89,0.08); border-color:var(--accent) }
+
+/* Progress bar tweaks */
+.torimo-progress{ height:8px; border-radius:999px; background:#e6f4ea; overflow:hidden }
+.torimo-progress > div{ border-radius:999px }
+
+/* Center card content area */
+.card h2{ text-align:center; margin:0 0 6px 0 }
+.card p.muted{ text-align:center; margin:0 0 12px 0 }
+
+/* spacing between label and inputs and between inputs inside the card */
+.card .form label + input,
+.card .form input{
+	margin-top:6px;
+	margin-bottom:14px;
+}
+
+.card .form .radio-row{ margin-bottom:12px }
+
+/* Adjust small screens */
+@media (max-width:420px){
+	.signup-wrapper{ padding:0 10px }
+	.card{ padding:20px }
+	.btn-primary, .btn-outline{ height:48px }
+}

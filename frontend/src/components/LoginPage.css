@@ -1,0 +1,100 @@
+/* Basic styles for the LoginPage component */
+:root{
+  --accent: #34C759;
+  --accent-2: #30D158;
+  --bg-from: #f8faf9;
+  --bg-to: #e8f5ec;
+  --card-radius: 24px;
+}
+
+.login-page{
+  min-height: 100vh;
+  /* Use small viewport height on mobile to avoid address bar jump causing tiny scrollbars */
+  min-height: 100svh;
+  background: linear-gradient(180deg,var(--bg-from),var(--bg-to));
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  padding:24px;
+  box-sizing:border-box;
+}
+
+.login-wrapper{
+  width:100%;
+  max-width:400px;
+}
+
+.logo .brand{
+  font-size:28px;
+  margin:0 0 12px 0;
+}
+.brand-dark{ color: #111827; }
+.brand-accent{ color: var(--accent); }
+
+.card{
+  background:#fff;
+  border-radius:var(--card-radius);
+  box-shadow: 0 10px 25px rgba(16,24,40,0.08);
+  padding:28px;
+}
+.card-header h2{ margin:0 0 6px 0; font-size:20px; }
+.muted{ color:#6b7280; font-size:13px; margin:0 }
+
+.form{ display:flex; flex-direction:column; gap:12px; margin-top:12px }
+.form-label{ font-size:13px; color:#374151 }
+
+.torimo-input{
+  height:48px;
+  padding:10px 12px;
+  border:1px solid #E5E7EB;
+  border-radius:10px;
+  background:#F9FAFB;
+  color:#111827;
+  outline:none;
+  box-sizing:border-box;
+  width:100%;
+}
+.torimo-input:focus{ box-shadow:0 0 0 4px rgba(52,199,89,0.08); border-color:var(--accent); }
+
+.password-row{ display:flex; gap:8px; align-items:center; position:relative }
+.eye-btn{ background:transparent; border:none; cursor:pointer; font-size:18px; padding:6px; }
+
+/* label helper for components that use Label.jsx */
+.torimo-label{ display:block; margin-bottom:8px; font-size:13px; color:#374151 }
+
+/* spacing between label and inputs and between inputs inside the card */
+.card .form .torimo-label + .torimo-input,
+.card .form .torimo-input{
+  margin-top:6px;
+  margin-bottom:14px;
+}
+
+.card .form .password-row{ margin-bottom:8px }
+
+.row-between{ display:flex; align-items:center; justify-content:space-between; margin-top:6px }
+.checkbox-label{ display:flex; gap:8px; align-items:center; cursor:pointer; color:#4b5563 }
+.link-btn{ background:none; border:none; color:var(--accent); cursor:pointer }
+
+.primary-btn{ width:100%; height:48px; border-radius:10px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:white; border:none; cursor:pointer; font-weight:600; box-shadow:0 6px 14px rgba(48,209,88,0.18); }
+.primary-btn:active{ transform:translateY(1px) }
+
+.signup-note{ text-align:center; color:#6b7280; margin-top:14px; }
+.link-accent{ background:none; border:none; color:var(--accent); cursor:pointer }
+
+/* small screens tweak */
+@media (max-width:420px){
+  .login-wrapper{ padding:0 6px }
+  .card{ padding:20px }
+}
+
+/* Hide scrollbars in phone view while preserving scrollability */
+@media (max-width: 600px){
+  html, body{
+    -ms-overflow-style: none; /* IE & Edge */
+    scrollbar-width: none;    /* Firefox */
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar{
+    display: none;            /* Chrome, Safari, Opera */
+  }
+}

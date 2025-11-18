@@ -1,0 +1,70 @@
+/* MealManagement styles aligned with existing UI */
+:root{
+  --accent: #34C759;
+  --accent-2: #30D158;
+  --gold: #FFD700;
+}
+
+.meals-page{ min-height:100vh; min-height:100svh; background:linear-gradient(180deg,#f8faf9,#e8f5ec); }
+.meals-header{ background:#fff; border-bottom:1px solid #f1f5f9; padding:16px 24px }
+.meals-header h1{ margin:0; font-size:20px; color:#111827 }
+.meals-header .muted{ margin:4px 0 0 0; color:#6b7280; font-size:13px }
+
+.meals-container{ max-width:720px; margin:0 auto; padding:24px; box-sizing:border-box }
+
+.card{ background:#fff; border-radius:16px; border:1px solid #eef2f7; box-shadow:0 10px 24px rgba(16,24,40,0.06); padding:16px }
+.card + .card{ margin-top:16px }
+.card-title{ font-size:16px; color:#111827; margin:0 0 10px 0 }
+.ai-assist-card{ background:linear-gradient(90deg,#34C759,#30D158); border:1px solid #2fb34f; color:#fff; transition:transform .15s, box-shadow .15s }
+.ai-assist-card:hover{ transform:translateY(-2px); box-shadow:0 12px 28px -6px rgba(52,199,89,.35) }
+
+.muted{ color:#6b7280 }
+.small{ font-size:12px }
+
+.row{ display:flex; gap:12px; align-items:center }
+.row-between{ display:flex; align-items:center; justify-content:space-between }
+.grid-2{ display:grid; grid-template-columns:1fr 1fr; gap:12px }
+
+/* Tabs */
+.tabs{ width:100% }
+.tabs-list{ display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:12px }
+.tab-btn{ background:#f3f4f6; border:1px solid #e5e7eb; border-radius:10px; padding:10px; cursor:pointer }
+.tab-btn.active{ background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; border-color:transparent }
+
+/* Upload areas */
+.upload-box{ border:2px dashed #e5e7eb; border-radius:14px; padding:24px; text-align:center; cursor:pointer; transition:border-color .2s }
+.upload-box:hover{ border-color:var(--accent) }
+
+/* Results */
+.results{ display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:12px 0 }
+.metric{ background:#f9fafb; border:1px solid #eef2f7; border-radius:10px; padding:10px; text-align:center }
+.metric .label{ font-size:12px; color:#6b7280 }
+.metric .value{ font-size:14px; color:#111827 }
+
+.rating{ display:flex; gap:4px; align-items:center }
+.star{ font-size:18px; color:#e5e7eb }
+.star.filled{ color:var(--gold) }
+.comment-box{ background:#f6faf7; border:1px solid #e3f2e7; border-radius:10px; padding:12px; color:#374151; font-size:13px }
+
+.primary-btn{ height:44px; border-radius:10px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; border:none; cursor:pointer; font-weight:600 }
+.secondary-btn{ height:44px; border-radius:10px; background:#f3f4f6; border:1px solid #e5e7eb; cursor:pointer }
+
+/* History */
+.history-title{ font-size:16px; color:#111827; margin:8px 0 }
+.history-list{ display:flex; flex-direction:column; gap:10px }
+.history-item{ background:#fff; border:1px solid #eef2f7; border-radius:14px; padding:12px }
+.history-top{ display:flex; align-items:center; justify-content:space-between; margin-bottom:6px }
+.badge{ font-size:11px; color:var(--accent); background:rgba(52,199,89,.1); padding:2px 8px; border-radius:999px }
+
+/* Rank */
+.rank-card{ background:linear-gradient(135deg,rgba(255,215,0,.08),#fff); border:1px solid rgba(255,215,0,.25) }
+.badges{ display:flex; gap:8px; flex-wrap:wrap }
+.badge-earned{ background:#fff7d6; color:#7a5a00; border:1px solid #ffe58a; padding:6px 10px; border-radius:999px; font-size:12px }
+
+/* Charts */
+.chart-wrap{ background:#fff; border:1px solid #eef2f7; border-radius:16px; padding:12px }
+
+/* Responsive */
+@media (max-width:520px){
+  .results{ grid-template-columns:repeat(2,1fr) }
+}
