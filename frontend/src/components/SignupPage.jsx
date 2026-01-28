@@ -1,27 +1,34 @@
 import { useState } from 'react'
-import { Eye, EyeOff, ChevronRight, ChevronLeft, Check, X } from 'lucide-react'
+import { Eye, EyeOff, ChevronRight, ChevronLeft, Check, X, Mail } from 'lucide-react'
+import { useAuth } from '../hooks/useAuth'
 
+// サインアップ画面（4ステップフォーム）
 export default function SignupPage({ onSignup, onBackToLogin }) {
+  // ステップ管理とUI状態
   const [step, setStep] = useState(1)
   const [showPassword, setShowPassword] = useState(false)
   const [showConfirmPassword, setShowConfirmPassword] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [signupError, setSignupError] = useState('')
+  const [showSuccessDialog, setShowSuccessDialog] = useState(false)
+  const { registerUser } = useAuth()
 
-  // Step 1: Account Info
+  // Step 1: アカウント情報
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
 
-  // Step 2: Personal Info
+  // Step 2: 基本情報
   const [name, setName] = useState('')
   const [age, setAge] = useState('')
   const [gender, setGender] = useState('')
 
-  // Step 3: Body Info
+  // Step 3: 身体情報
   const [height, setHeight] = useState('')
   const [currentWeight, setCurrentWeight] = useState('')
   const [targetWeight, setTargetWeight] = useState('')
 
-  // Step 4: Goals
+  // Step 4: 目標と活動レベル
   const [goal, setGoal] = useState('')
   const [activityLevel, setActivityLevel] = useState('')
   const [agreedToTerms, setAgreedToTerms] = useState(false)
@@ -29,7 +36,7 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
   const totalSteps = 4
   const progress = (step / totalSteps) * 100
 
-  // Password validation
+  // パスワードのチェック
   const passwordValidation = {
     minLength: password.length >= 8,
     hasUpperCase: /[A-Z]/.test(password),
@@ -40,25 +47,67 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
                           passwordValidation.hasUpperCase && 
                           passwordValidation.hasLowerCase
 
+  // 次のステップへ
   const handleNext = () => {
     if (step < totalSteps) {
       setStep(step + 1)
     }
   }
 
+  // 前のステップへ
   const handleBack = () => {
     if (step > 1) {
       setStep(step - 1)
     }
   }
 
-  const handleSubmit = (e) => {
+  // 送信（最後のステップで登録）
+  const handleSubmit = async (e) => {
     e.preventDefault()
-    if (step === totalSteps) {
-      onSignup()
+    if (step < totalSteps) {
+      handleNext()
+      return
+    }
+    if (submitting) return
+
+    try {
+      setSignupError('')
+      setSubmitting(true)
+      const parsedAge = age ? parseInt(age, 10) : null
+      const parsedHeight = height ? parseFloat(height) : null
+      const parsedCurrentWeight = currentWeight ? parseFloat(currentWeight) : null
+      const parsedTargetWeight = targetWeight ? parseFloat(targetWeight) : null
+
+      await registerUser({
+        email: email.trim(),
+        password,
+        username: name.trim(),
+        profile: {
+          age: parsedAge,
+          gender,
+          height_cm: parsedHeight,
+          current_weight_kg: parsedCurrentWeight,
+          target_weight_kg: parsedTargetWeight,
+          goal,
+          activity_level: activityLevel,
+          agreed_to_terms: agreedToTerms,
+        },
+      })
+      setShowSuccessDialog(true)
+    } catch (err) {
+      setSignupError(err?.message || 'サインアップに失敗しました。もう一度お試しください。')
+    } finally {
+      setSubmitting(false)
     }
   }
 
+  // 登録完了後にログインへ
+  const handleGoToLogin = () => {
+    setShowSuccessDialog(false)
+    onSignup?.()
+  }
+
+  // ステップごとの入力チェック
   const isStepValid = () => {
     switch (step) {
       case 1:
@@ -75,8 +124,39 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6">
+    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6 transition-colors">
       <div className="w-full max-w-md">
+        {showSuccessDialog && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+            <div className="w-full max-w-md rounded-3xl bg-white dark:bg-zinc-900 p-8 text-center shadow-2xl transition-colors">
+              <div className="flex justify-center mb-4">
+                <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center">
+                  <Mail className="w-8 h-8 text-primary" />
+                </div>
+              </div>
+              <h3 className="text-2xl font-semibold text-gray-900 dark:text-white">確認メールを送信しました</h3>
+              <p className="mt-3 text-sm text-gray-600 dark:text-zinc-300 leading-relaxed">
+                <span className="font-semibold text-gray-900 dark:text-white">{email}</span> 宛に確認メールを送信しました。<br />
+                メール内の「メールアドレスを確認」リンクをクリックして登録を完了してください。
+              </p>
+              <div className="mt-4 text-left text-xs text-gray-600 dark:text-zinc-300 bg-gray-50 dark:bg-zinc-800/70 border border-gray-200 dark:border-zinc-700 rounded-xl p-3">
+                <p className="font-semibold mb-2 text-gray-900 dark:text-white">メールが届かない場合</p>
+                <ul className="list-disc pl-5 space-y-1">
+                  <li>迷惑メールフォルダをご確認ください。</li>
+                  <li>数分待って届かない場合は再度お試しください。</li>
+                  <li>入力したメールアドレスが正しいかご確認ください。</li>
+                </ul>
+              </div>
+              <button
+                type="button"
+                onClick={handleGoToLogin}
+                className="mt-6 w-full rounded-2xl bg-gradient-to-r from-primary to-primary/90 py-3 text-sm font-semibold text-white shadow-lg hover:opacity-95 transition-colors"
+              >
+                ログイン画面へ進む
+              </button>
+            </div>
+          </div>
+        )}
         {/* Logo */}
         <div className="text-center mb-8">
           <h1 className="text-4xl font-bold mb-2">
@@ -101,7 +181,7 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
         </div>
 
         {/* Form Card */}
-        <div className="bg-card rounded-3xl shadow-lg p-8">
+        <div className="bg-card rounded-3xl shadow-lg p-8 transition-colors">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Step 1: Account Information */}
             {step === 1 && (
@@ -115,6 +195,7 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
 
                 <div>
                   <label htmlFor="email" className="text-card-foreground text-sm font-medium block mb-2">
+
                     メールアドレス
                   </label>
                   <input
@@ -451,13 +532,18 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
               </div>
             )}
 
+            {signupError && (
+              <p className="text-center text-destructive text-sm">{signupError}</p>
+            )}
+
             {/* Navigation Buttons */}
             <div className="flex gap-3 pt-4">
               {step > 1 && (
                 <button
                   type="button"
                   onClick={handleBack}
-                  className="flex-1 h-12 flex items-center justify-center gap-2 border-2 border-border text-card-foreground rounded-xl font-medium hover:bg-muted transition-all active:scale-[0.98]"
+                  disabled={submitting}
+                  className="flex-1 h-12 flex items-center justify-center gap-2 border-2 border-border text-card-foreground rounded-xl font-medium hover:bg-muted transition-all active:scale-[0.98] disabled:opacity-50"
                 >
                   <ChevronLeft className="w-4 h-4" />
                   戻る
@@ -468,7 +554,7 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
                 <button
                   type="button"
                   onClick={handleNext}
-                  disabled={!isStepValid()}
+                  disabled={!isStepValid() || submitting}
                   className="flex-1 h-12 flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-primary/90 text-primary-foreground rounded-xl font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed shadow-md transition-all active:scale-[0.98]"
                 >
                   次へ
@@ -477,11 +563,17 @@ export default function SignupPage({ onSignup, onBackToLogin }) {
               ) : (
                 <button
                   type="submit"
-                  disabled={!isStepValid()}
+                  disabled={!isStepValid() || submitting}
                   className="flex-1 h-12 flex items-center justify-center gap-2 bg-gradient-to-r from-primary to-primary/90 text-primary-foreground rounded-xl font-semibold hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed shadow-md transition-all active:scale-[0.98]"
                 >
-                  <Check className="w-4 h-4" />
-                  アカウント作成
+                  {submitting ? (
+                    '登録中…'
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      アカウント作成
+                    </>
+                  )}
                 </button>
               )}
             </div>

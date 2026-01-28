@@ -16,6 +16,14 @@ db.sqlite3
 .env
 .env.*
 
+# Node dependencies
+node_modules/
+**/node_modules/
+
+# Frontend build artifacts
+frontend/dist/
+frontend/.vite/
+
 # VSCode / IDE files
 .vscode/
 .idea/

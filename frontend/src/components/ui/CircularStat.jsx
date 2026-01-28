@@ -6,6 +6,7 @@ export default function CircularStat({
   goal = 100,
   unit = '',
   color = '#22c55e', // default green
+  darkColor,
   size = 72,
   thickness = 8,
 }){
@@ -13,17 +14,19 @@ export default function CircularStat({
   const r = (size / 2) - (thickness / 2)
   const circumference = 2 * Math.PI * r
   const dashOffset = circumference * (1 - pct / 100)
+  // Use darkColor if provided, otherwise map common colors to neon variants
+  const resolvedDarkColor = darkColor || (color === '#22c55e' || color === '#34C759' ? '#00ff41' : color)
 
   return (
-    <div style={{ display:'flex', flexDirection:'column', alignItems:'center' }}>
-      <div style={{ width:size, height:size, position:'relative' }}>
+    <div className="flex flex-col items-center transition-colors">
+      <div style={{ width:size, height:size }} className="relative">
         <svg width={size} height={size} style={{ transform:'rotate(-90deg)' }}>
           {/* Track */}
           <circle
             cx={size/2}
             cy={size/2}
             r={r}
-            stroke="#e5e7eb"
+            className="stroke-gray-200 dark:stroke-zinc-700 transition-colors"
             strokeWidth={thickness}
             fill="none"
           />
@@ -33,6 +36,19 @@ export default function CircularStat({
             cy={size/2}
             r={r}
             stroke={color}
+            className="dark:hidden"
+            strokeWidth={thickness}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={dashOffset}
+            fill="none"
+          />
+          <circle
+            cx={size/2}
+            cy={size/2}
+            r={r}
+            stroke={resolvedDarkColor}
+            className="hidden dark:block"
             strokeWidth={thickness}
             strokeLinecap="round"
             strokeDasharray={circumference}
@@ -40,15 +56,14 @@ export default function CircularStat({
             fill="none"
           />
         </svg>
-        <div style={{
-          position:'absolute', inset:0, display:'flex', alignItems:'center', justifyContent:'center',
-          fontSize:12, fontWeight:600, color:'#374151'
-        }}>{pct}%</div>
+        <div className="absolute inset-0 flex items-center justify-center text-xs font-semibold text-gray-600 dark:text-zinc-300 transition-colors">
+          {pct}%
+        </div>
       </div>
-      <div style={{ marginTop:8, textAlign:'center' }}>
-        <div style={{ fontSize:12, color:'#374151' }}>{label}</div>
-        <div style={{ fontSize:14, fontWeight:700, color:'#111827' }}>{value}{unit}</div>
-        <div style={{ fontSize:10, color:'#6b7280' }}>/ {goal}</div>
+      <div className="mt-2 text-center">
+        <div className="text-xs text-gray-600 dark:text-zinc-400 transition-colors">{label}</div>
+        <div className="text-sm font-bold text-gray-900 dark:text-white transition-colors">{value}{unit}</div>
+        <div className="text-[10px] text-gray-500 dark:text-zinc-500 transition-colors">/ {goal}</div>
       </div>
     </div>
   )

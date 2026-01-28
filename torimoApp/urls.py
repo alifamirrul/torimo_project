@@ -1,7 +1,6 @@
 from django.urls import path, include
 from . import views
 from .api_views import analyze_nutrition, suggest_nutrition, assistant_chat, assistant_status
-from . import api_urls as api_v1
 
 urlpatterns = [
     path('', views.index, name='index'),
@@ -10,7 +9,5 @@ urlpatterns = [
     path('meals/', views.meals_list, name='meals_list'),
     path('logs/', views.logs_list, name='logs_list'),
     path('logs/<int:pk>/', views.log_detail, name='log_detail'),
-    # Proper API mount (router endpoints) at /api/
-    path('api/', include(api_v1)),
 ]
 

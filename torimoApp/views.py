@@ -1,8 +1,6 @@
-from django.shortcuts import render, get_object_or_404, redirect
 from django.http import HttpResponse, HttpResponseRedirect
 from django.conf import settings
 from pathlib import Path
-from .models import Exercise, Meal, DailyLog
 
 
 def index(request):
@@ -22,13 +20,11 @@ def index(request):
 
         # 2) If in DEBUG, redirect to Vite dev server if user hits backend root by mistake
         if getattr(settings, 'DEBUG', False):
-                # Default Vite port
-                return HttpResponseRedirect('http://localhost:5173/')
+            dev_url = getattr(settings, 'FRONTEND_DEV_SERVER_URL', 'http://localhost:5173/')
+            dev_url = (dev_url.rstrip('/') or 'http://localhost:5173') + '/'
+            return HttpResponseRedirect(dev_url)
 
-        # 3) Minimal fallback page
-        exercises_count = Exercise.objects.count()
-        meals_count = Meal.objects.count()
-        logs = DailyLog.objects.order_by('-date')[:5]
+        # 3) Minimal fallback page – now static because application data lives in Supabase
         html = f"""
         <!DOCTYPE html>
         <html lang=\"ja\">
@@ -41,11 +37,7 @@ def index(request):
         <body>
             <h1>Torimo Backend</h1>
             <p class=\"muted\">React フロントエンドが未ビルドです。開発中は Vite 開発サーバーを起動して <a href=\"http://localhost:5173/\">http://localhost:5173/</a> を開いてください。<br/>本番用は frontend/dist をビルド後、/ に配信されます。</p>
-            <ul>
-                <li>Exercises: {exercises_count}</li>
-                <li>Meals: {meals_count}</li>
-                <li>最近のログ: {len(list(logs))} 件</li>
-            </ul>
+            <p>Torimo の全データは Supabase に保存されます。Django は API プロキシと AI 補助のみを担当します。</p>
             <p><a href=\"/api/\">API ルートへ</a></p>
         </body>
         </html>
@@ -54,20 +46,16 @@ def index(request):
 
 
 def exercises_list(request):
-    exercises = Exercise.objects.all()
-    return render(request, 'exercises.html', {'exercises': exercises})
+    return HttpResponse('Exercises are now managed exclusively in Supabase.', content_type='text/plain')
 
 
 def meals_list(request):
-    meals = Meal.objects.all()
-    return render(request, 'meals.html', {'meals': meals})
+    return HttpResponse('Meals are now managed exclusively in Supabase.', content_type='text/plain')
 
 
 def logs_list(request):
-    logs = DailyLog.objects.all()
-    return render(request, 'logs.html', {'logs': logs})
+    return HttpResponse('Daily logs are now managed exclusively in Supabase.', content_type='text/plain')
 
 
 def log_detail(request, pk):
-    log = get_object_or_404(DailyLog, pk=pk)
-    return render(request, 'log_detail.html', {'log': log})
+    return HttpResponse('Daily log details live in Supabase.', content_type='text/plain')

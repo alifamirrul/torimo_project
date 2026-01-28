@@ -1,3 +1,4 @@
+// ログイン画面のUIと入力処理
 import { useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 
@@ -17,7 +18,7 @@ export default function LoginPage({ onLogin, onSignupClick, onForgotPasswordClic
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6">
+    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6 transition-colors">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-12">
@@ -28,7 +29,7 @@ export default function LoginPage({ onLogin, onSignupClick, onForgotPasswordClic
         </div>
 
         {/* Login Form */}
-        <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6">
+        <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6 transition-colors">
           <div className="text-center mb-8">
             <h2 className="text-2xl font-semibold text-card-foreground mb-2">ログイン</h2>
             <p className="text-muted-foreground text-sm">

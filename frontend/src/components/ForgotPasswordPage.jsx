@@ -1,25 +1,43 @@
+// パスワードリセット画面
 import { useState } from 'react'
 import { ArrowLeft, Mail, CheckCircle2, Loader2 } from 'lucide-react'
+import { resolveSiteUrl, supabase } from '../supabaseClient'
 
 export default function ForgotPasswordPage({ onBack }) {
   const [email, setEmail] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [emailSent, setEmailSent] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
 
-  const handlePasswordReset = async (e) => {
+  const handleResetPassword = async (e) => {
     e.preventDefault()
+    setErrorMessage('')
+    setSuccessMessage('')
     setIsLoading(true)
 
-    // Simulate API call
-    setTimeout(() => {
-      setIsLoading(false)
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: `${resolveSiteUrl()}/update-password`,
+      })
+
+      if (error) {
+        setErrorMessage('送信に失敗しました。メールアドレスをご確認ください。')
+        return
+      }
+
+      setSuccessMessage('リセット用のメールを送信しました。')
       setEmailSent(true)
-    }, 1500)
+    } catch (err) {
+      setErrorMessage('通信エラーが発生しました。もう一度お試しください。')
+    } finally {
+      setIsLoading(false)
+    }
   }
 
   if (emailSent) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6">
+      <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6 transition-colors">
         <div className="w-full max-w-sm">
           {/* Logo */}
           <div className="text-center mb-12">
@@ -30,7 +48,7 @@ export default function ForgotPasswordPage({ onBack }) {
           </div>
 
           {/* Success Card */}
-          <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6">
+          <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6 transition-colors">
             <div className="text-center space-y-4">
               <div className="flex justify-center">
                 <div className="w-20 h-20 bg-primary/10 rounded-full flex items-center justify-center">
@@ -73,7 +91,7 @@ export default function ForgotPasswordPage({ onBack }) {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6">
+    <div className="min-h-screen bg-gradient-to-b from-background to-secondary flex items-center justify-center p-6 transition-colors">
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="text-center mb-12">
@@ -84,7 +102,7 @@ export default function ForgotPasswordPage({ onBack }) {
         </div>
 
         {/* Password Reset Form */}
-        <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6">
+        <div className="bg-card rounded-3xl shadow-lg p-8 space-y-6 transition-colors">
           {/* Back Button */}
           <button
             onClick={onBack}
@@ -94,7 +112,7 @@ export default function ForgotPasswordPage({ onBack }) {
             <span className="text-sm font-medium">ログインに戻る</span>
           </button>
 
-          <form onSubmit={handlePasswordReset} className="space-y-4">
+          <form onSubmit={handleResetPassword} className="space-y-4">
             <div className="text-center mb-6">
               <h2 className="text-2xl font-semibold text-card-foreground mb-2">パスワードのリセット</h2>
               <p className="text-muted-foreground text-sm">
@@ -131,6 +149,13 @@ export default function ForgotPasswordPage({ onBack }) {
                 'リセットリンクを送信'
               )}
             </button>
+
+            {errorMessage && (
+              <p className="text-sm text-destructive text-center">{errorMessage}</p>
+            )}
+            {successMessage && (
+              <p className="text-sm text-primary text-center">{successMessage}</p>
+            )}
           </form>
         </div>
       </div>

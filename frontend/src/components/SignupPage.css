@@ -1,43 +1,84 @@
-/* Basic styles for SignupPage (keeps simple, similar to LoginPage) */
-.signup-page{ min-height:100vh; background:linear-gradient(180deg,#f8faf9,#e8f5ec); display:flex; align-items:center; justify-content:center; padding:24px }
+/* SignupPage の基本スタイル */
+/* カラー変数 */
+:root{
+  --accent: #34C759;
+  --accent-2: #30D158;
+}
+.dark{
+  --accent: #00ff41;
+  --accent-2: #00cc33;
+}
+
+/* ページ全体 */
+.signup-page{ min-height:100vh; background:linear-gradient(180deg,#f8faf9,#e8f5ec); display:flex; align-items:center; justify-content:center; padding:24px; transition: background 0.3s ease; }
+.dark .signup-page{ background:linear-gradient(180deg,#09090b,#09090b); }
+
+/* 中央のカード幅 */
 .signup-wrapper{ width:100%; max-width:520px }
-.brand{ font-size:18px; margin-bottom:4px; text-align:center; letter-spacing:1px }
-.muted{ color:#6b7280; text-align:center }
+/* ブランド名 */
+.brand{ font-size:18px; margin-bottom:4px; text-align:center; letter-spacing:1px; color:#1f2937; transition: color 0.3s ease; }
+.dark .brand{ color:#fafafa; }
+.muted{ color:#6b7280; text-align:center; transition: color 0.3s ease; }
+.dark .muted{ color:#a1a1aa; }
 .accent{ color:var(--accent) }
 .small{ font-size:13px }
+/* 進捗バー周り */
 .progress-block{ margin-bottom:20px }
-.card{ background:#fff; border-radius:28px; padding:28px; box-shadow:0 18px 40px rgba(16,24,40,0.08) }
+/* フォームカード */
+.card{ background:#fff; border-radius:28px; padding:28px; box-shadow:0 18px 40px rgba(16,24,40,0.08); transition: all 0.3s ease; }
+.dark .card{ background:#18181b; box-shadow:0 18px 40px rgba(0,0,0,0.3); }
+/* フォームの並び */
 .form{ display:flex; flex-direction:column; gap:14px }
 .relative{ position:relative }
-.eye-btn{ position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:18px }
-.pw-req{ margin-top:10px; background:#fbfdfb; padding:12px; border-radius:10px; border:1px solid #e9efe9 }
-.pw-row{ display:flex; gap:8px; align-items:center; font-size:13px }
-.pw-row .icon{ width:16px; height:16px; color:#9ca3af }
+/* パスワード表示ボタン */
+.eye-btn{ position:absolute; right:12px; top:50%; transform:translateY(-50%); background:none; border:none; cursor:pointer; font-size:18px; color:#6b7280; transition: color 0.3s ease; }
+.dark .eye-btn{ color:#a1a1aa; }
+.pw-req{ margin-top:10px; background:#fbfdfb; padding:12px; border-radius:10px; border:1px solid #e9efe9; transition: all 0.3s ease; }
+.dark .pw-req{ background:#27272a; border-color:#3f3f46; }
+.pw-row{ display:flex; gap:8px; align-items:center; font-size:13px; color:#374151; transition: color 0.3s ease; }
+.dark .pw-row{ color:#a1a1aa; }
+.pw-row .icon{ width:16px; height:16px; color:#9ca3af; transition: color 0.3s ease; }
+.dark .pw-row .icon{ color:#71717a; }
 .pw-row .icon.ok{ color:var(--accent) }
 .error{ color:#ef4444; font-size:13px }
-.radio-row{ display:flex; gap:8px; align-items:center; padding:12px; background:#fbfbfb; border-radius:10px; border:1px solid #eef2ef }
+.radio-row{ display:flex; gap:8px; align-items:center; padding:12px; background:#fbfbfb; border-radius:10px; border:1px solid #eef2ef; transition: all 0.3s ease; color:#374151; }
+.dark .radio-row{ background:#27272a; border-color:#3f3f46; color:#fafafa; }
 .nav-row{ display:flex; gap:12px; margin-top:16px }
-.btn-primary{ flex:1; height:52px; border-radius:999px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; border:none; cursor:pointer; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px }
-.btn-outline{ flex:1; height:52px; border-radius:999px; background:#fff; border:1px solid #e5e7eb; color:#374151 }
-.terms-label{ display:flex; gap:8px; align-items:flex-start }
+.btn-primary{ flex:1; height:52px; border-radius:999px; background:linear-gradient(90deg,var(--accent),var(--accent-2)); color:#fff; border:none; cursor:pointer; font-weight:600; display:flex; align-items:center; justify-content:center; gap:8px; transition: all 0.3s ease; }
+.dark .btn-primary{ color:#09090b; }
+.btn-outline{ flex:1; height:52px; border-radius:999px; background:#fff; border:1px solid #e5e7eb; color:#374151; transition: all 0.3s ease; cursor:pointer; }
+.dark .btn-outline{ background:#27272a; border-color:#3f3f46; color:#fafafa; }
+.terms-label{ display:flex; gap:8px; align-items:flex-start; color:#374151; transition: color 0.3s ease; }
+.dark .terms-label{ color:#a1a1aa; }
 .link{ background:none; border:none; color:var(--accent); cursor:pointer }
 
-/* Inputs inside card: make them visually like the screenshot */
+/* 入力欄の見た目調整 */
 .card input[type="text"], .card input[type="email"], .card input[type="password"], .card input[type="number"]{
-	height:48px; border-radius:12px; padding:12px 14px; border:1px solid #e6eef0; background:#fbfdfe; box-shadow:none; outline:none; font-size:14px; color:#1f2937; width:100%; box-sizing:border-box; display:block;
+	height:48px; border-radius:12px; padding:12px 14px; border:1px solid #e6eef0; background:#fbfdfe; box-shadow:none; outline:none; font-size:14px; color:#1f2937; width:100%; box-sizing:border-box; display:block; transition: all 0.3s ease;
 }
-.card input::placeholder{ color:#9aa3a3 }
+.dark .card input[type="text"], .dark .card input[type="email"], .dark .card input[type="password"], .dark .card input[type="number"]{
+	background:#27272a; border-color:#3f3f46; color:#fafafa;
+}
+.card input::placeholder{ color:#9aa3a3; transition: color 0.3s ease; }
+.dark .card input::placeholder{ color:#71717a; }
 .card input:focus{ box-shadow:0 6px 20px rgba(52,199,89,0.08); border-color:var(--accent) }
+.dark .card input:focus{ box-shadow:0 6px 20px rgba(0,255,65,0.08); }
 
-/* Progress bar tweaks */
-.torimo-progress{ height:8px; border-radius:999px; background:#e6f4ea; overflow:hidden }
+/* 進捗バー調整 */
+.torimo-progress{ height:8px; border-radius:999px; background:#e6f4ea; overflow:hidden; transition: background 0.3s ease; }
+.dark .torimo-progress{ background:#27272a; }
 .torimo-progress > div{ border-radius:999px }
 
-/* Center card content area */
-.card h2{ text-align:center; margin:0 0 6px 0 }
+/* カード内の見出し調整 */
+.card h2{ text-align:center; margin:0 0 6px 0; color:#1f2937; transition: color 0.3s ease; }
+.dark .card h2{ color:#fafafa; }
 .card p.muted{ text-align:center; margin:0 0 12px 0 }
 
-/* spacing between label and inputs and between inputs inside the card */
+/* ラベル */
+.card label{ color:#374151; transition: color 0.3s ease; }
+.dark .card label{ color:#a1a1aa; }
+
+/* ラベルと入力欄の間隔 */
 .card .form label + input,
 .card .form input{
 	margin-top:6px;
@@ -46,7 +87,11 @@
 
 .card .form .radio-row{ margin-bottom:12px }
 
-/* Adjust small screens */
+/* 成功ダイアログのオーバーレイ */
+.dialog-overlay{ background:rgba(0,0,0,0.5); }
+.dark .dialog-overlay{ background:rgba(0,0,0,0.7); }
+
+/* 小さい画面向け */
 @media (max-width:420px){
 	.signup-wrapper{ padding:0 10px }
 	.card{ padding:20px }

@@ -1,8 +1,12 @@
-﻿import { useState, useEffect, useRef } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Plus, Search, X, Loader2, Sparkles, TrendingUp, Award, AlertTriangle, Pencil, Trash2, Save } from 'lucide-react';
+﻿// 食事管理（検索/登録/履歴）
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { CalendarDays, ChevronLeft, ChevronRight, Plus, Search, X, Loader2, Sparkles, TrendingUp, Award, AlertTriangle, Pencil, Trash2, Save, ScanLine } from 'lucide-react';
 import Progress from './ui/Progress';
 import CircularStat from './ui/CircularStat';
+import { useAuth } from '../hooks/useAuth.js';
+import BarcodeScannerModal from './BarcodeScannerModal.jsx';
 
+// APIのベースURLを決める
 function resolveApiBase() {
   const envBase = import.meta.env.VITE_API_BASE;
   if (envBase) {
@@ -19,10 +23,45 @@ function resolveApiBase() {
   return 'http://127.0.0.1:8000';
 }
 
+// APIのベースURL
 const API_BASE = resolveApiBase();
+// 1食あたりの高マクロ基準
 const MACRO_THRESHOLDS = { protein: 25, fat: 20, carbs: 45 }; // 1食あたりの高マクロ基準
+const OPEN_FOOD_FACTS_ENDPOINT = 'https://world.openfoodfacts.org/api/v2/product';
 
+// 数値に変換（失敗時は0）
+const numberOrZero = (value) => {
+  if (value === null || value === undefined || value === '') return 0;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+// サービングサイズの文字列から数値を取り出す
+const parseServingSize = (text) => {
+  if (!text || typeof text !== 'string') return null;
+  const match = text.replace(/,/g, '.').match(/([0-9]+(?:\.[0-9]+)?)\s*(g|ml|mL|グラム|ミリリットル)?/i);
+  if (!match) return null;
+  const value = parseFloat(match[1]);
+  if (!Number.isFinite(value)) return null;
+  return value;
+};
+
+// バーコード取得データをフォーム値に変換する
+const buildBarcodeFormValues = (macrosPer100, grams) => {
+  const safeGrams = grams && grams > 0 ? grams : 100;
+  const ratio = safeGrams / 100;
+  return {
+    calories: Math.round(Math.max(0, macrosPer100.calories * ratio)).toString(),
+    protein: (Math.max(0, macrosPer100.protein * ratio)).toFixed(1),
+    fat: (Math.max(0, macrosPer100.fat * ratio)).toFixed(1),
+    carbs: (Math.max(0, macrosPer100.carbs * ratio)).toFixed(1),
+  };
+};
+
+// 食事管理画面
 export default function MealManagement() {
+  // 認証トークン取得
+  const { getAccessToken } = useAuth();
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date();
     return today.toISOString().split('T')[0];
@@ -55,6 +94,17 @@ export default function MealManagement() {
   const [editingFields, setEditingFields] = useState({ name: '', calories: '', protein: '', fat: '', carbs: '' });
   const [updating, setUpdating] = useState(false);
   const [deletingId, setDeletingId] = useState(null);
+  // --- Barcode scanning states ---
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [manualBarcode, setManualBarcode] = useState('');
+  const [barcodeStatus, setBarcodeStatus] = useState('idle');
+  const [barcodeProduct, setBarcodeProduct] = useState(null);
+  const [barcodeServing, setBarcodeServing] = useState('100');
+  const [barcodeForm, setBarcodeForm] = useState({ name: '', calories: '0', protein: '0', fat: '0', carbs: '0' });
+  const [barcodeTouched, setBarcodeTouched] = useState(false);
+  const [barcodeError, setBarcodeError] = useState('');
+  const [barcodeSaving, setBarcodeSaving] = useState(false);
+  const [barcodeSuccess, setBarcodeSuccess] = useState('');
 
   // --- 1日の目標値（kcal / マクロ） ---
   const goals = {
@@ -149,6 +199,18 @@ export default function MealManagement() {
   const displayedMeals = macroFilteredMeals;
 
   // --- 日付変更時に食事履歴を再取得 ---
+  const buildAuthHeaders = useCallback((withJson = false) => {
+    const token = getAccessToken();
+    if (!token) {
+      throw new Error('ログイン情報を確認できません。再度サインインしてください。');
+    }
+    const headers = { Authorization: `Bearer ${token}` };
+    if (withJson) {
+      headers['Content-Type'] = 'application/json';
+    }
+    return headers;
+  }, [getAccessToken]);
+
   useEffect(() => {
     fetchMeals();
   }, [selectedDate]);
@@ -158,13 +220,32 @@ export default function MealManagement() {
     setLoading(true);
     setError('');
     try {
-      const res = await fetch(`${API_BASE}/api/meals/?date=${selectedDate}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const res = await fetch(`${API_BASE}/api/meals/?date=${selectedDate}`, {
+        headers: buildAuthHeaders(),
+      });
+      if (!res.ok) {
+        let detail = `HTTP ${res.status}`;
+        try {
+          const body = await res.json();
+          detail = body?.detail || body?.error || detail;
+        } catch (_) {
+          try {
+            detail = await res.text();
+          } catch (__err) {
+            // ignore
+          }
+        }
+        throw new Error(detail);
+      }
       const data = await res.json();
       setMeals(data);
     } catch (err) {
-      setError('食事履歴の取得に失敗しました');
       console.error(err);
+      if (err.message.includes('Supabase authentication')) {
+        setError('ログインセッションが無効です。再度サインインしてください。');
+      } else {
+        setError('食事履歴の取得に失敗しました: ' + err.message);
+      }
     } finally {
       setLoading(false);
     }
@@ -206,35 +287,232 @@ export default function MealManagement() {
     setSearchResults([]);
   };
 
+  const fetchFoodByName = async (name) => {
+    if (!name) return null;
+    try {
+      const res = await fetch(`${API_BASE}/api/nutrition/search/?q=${encodeURIComponent(name)}&limit=1`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      const food = Array.isArray(data) ? data[0] : (data.results ? data.results[0] : null);
+      if (food) {
+        setSelectedFood(food);
+        return food;
+      }
+    } catch (err) {
+      console.error('食材取得に失敗しました', err);
+    }
+    return null;
+  };
+
+  const resetBarcodeFlow = (keepSuccess = false) => {
+    setBarcodeProduct(null);
+    setBarcodeForm({ name: '', calories: '0', protein: '0', fat: '0', carbs: '0' });
+    setBarcodeServing('100');
+    setBarcodeTouched(false);
+    setBarcodeError('');
+    setBarcodeStatus('idle');
+    setManualBarcode('');
+    if (!keepSuccess) {
+      setBarcodeSuccess('');
+    }
+  };
+
+  const openScanner = () => {
+    resetBarcodeFlow();
+    setScannerOpen(true);
+  };
+
+  const handleBarcodeDetected = (code) => {
+    setScannerOpen(false);
+    lookupBarcode(code);
+  };
+
+  const lookupBarcode = async (code) => {
+    const trimmed = (code || '').trim();
+    if (!trimmed) {
+      setBarcodeError('バーコードを入力してください');
+      setBarcodeStatus('error');
+      return;
+    }
+    setBarcodeStatus('loading');
+    setBarcodeError('');
+    setBarcodeSuccess('');
+    try {
+      const res = await fetch(`${OPEN_FOOD_FACTS_ENDPOINT}/${encodeURIComponent(trimmed)}.json`);
+      if (!res.ok) {
+        throw new Error('Open Food Facts APIに接続できませんでした');
+      }
+      const json = await res.json();
+      if (json.status !== 1 || !json.product) {
+        throw new Error('該当する商品が見つかりませんでした');
+      }
+      const product = json.product || {};
+      const nutriments = product.nutriments || {};
+      const macrosPer100 = {
+        calories: numberOrZero(nutriments['energy-kcal_100g'] ?? nutriments['energy-kcal_100ml']),
+        protein: numberOrZero(nutriments['proteins_100g'] ?? nutriments['proteins_100ml']),
+        fat: numberOrZero(nutriments['fat_100g'] ?? nutriments['fat_100ml']),
+        carbs: numberOrZero(nutriments['carbohydrates_100g'] ?? nutriments['carbohydrates_100ml']),
+      };
+      const name = product.product_name || product.generic_name || product.brands || '不明な商品';
+      const brand = product.brands || '';
+      const servingGuess = parseServingSize(product.serving_size) || parseServingSize(product.serving_quantity) || 100;
+      setBarcodeProduct({
+        barcode: trimmed,
+        name,
+        brand,
+        image: product.image_front_thumb_url || product.image_front_small_url || null,
+        macrosPer100,
+      });
+      setManualBarcode(trimmed);
+      setBarcodeServing(String(servingGuess));
+      setBarcodeTouched(false);
+      setBarcodeForm({ name, ...buildBarcodeFormValues(macrosPer100, servingGuess) });
+      setBarcodeStatus('result');
+      if (!macrosPer100.calories && !macrosPer100.protein && !macrosPer100.fat && !macrosPer100.carbs) {
+        setBarcodeError('栄養情報が見つかりませんでした。数値を手動で入力してください。');
+      }
+    } catch (err) {
+      console.error(err);
+      setBarcodeStatus('error');
+      setBarcodeError(err.message || 'バーコードの解析に失敗しました');
+    }
+  };
+
+  const handleManualBarcodeLookup = () => {
+    lookupBarcode(manualBarcode);
+  };
+
+  const handleBarcodeFieldChange = (field, value) => {
+    setBarcodeTouched(true);
+    setBarcodeForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleBarcodeServingChange = (value) => {
+    setBarcodeServing(value);
+    if (!barcodeTouched && barcodeProduct) {
+      const nextValues = buildBarcodeFormValues(barcodeProduct.macrosPer100, parseFloat(value));
+      setBarcodeForm((prev) => ({ ...prev, ...nextValues }));
+    }
+  };
+
+  const handleSkipScannedItem = () => {
+    resetBarcodeFlow();
+    setScannerOpen(true);
+  };
+
+  const handleSaveBarcodeMeal = async () => {
+    if (!barcodeProduct) return;
+    const payload = {
+      barcode: barcodeProduct.barcode,
+      name: barcodeForm.name.trim() || barcodeProduct.name,
+      calories: parseInt(barcodeForm.calories, 10) || 0,
+      protein: parseFloat(barcodeForm.protein) || 0,
+      fat: parseFloat(barcodeForm.fat) || 0,
+      carbs: parseFloat(barcodeForm.carbs) || 0,
+      category,
+      consumed_at: selectedDate,
+      serving_grams: parseFloat(barcodeServing) || null,
+    };
+
+    setBarcodeSaving(true);
+    setError('');
+    setBarcodeSuccess('');
+    try {
+      const res = await fetch(`${API_BASE}/api/meals/barcode/`, {
+        method: 'POST',
+        headers: buildAuthHeaders(true),
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        let detail = '保存に失敗しました';
+        try {
+          const body = await res.json();
+          detail = body?.detail || body?.error || detail;
+        } catch (jsonErr) {
+          console.error(jsonErr);
+        }
+        throw new Error(detail);
+      }
+      let savedMeal = null;
+      try {
+        const body = await res.json();
+        savedMeal = Array.isArray(body) ? body[0] : body;
+      } catch (jsonErr) {
+        console.error('保存結果の解析に失敗しました', jsonErr);
+      }
+      if (savedMeal && typeof savedMeal.consumed_at === 'string' && savedMeal.consumed_at.startsWith(selectedDate)) {
+        setMeals((prev) => {
+          const filtered = savedMeal.id ? prev.filter((meal) => meal.id !== savedMeal.id) : prev;
+          return [savedMeal, ...filtered];
+        });
+      }
+      resetBarcodeFlow(true);
+      const successName = savedMeal?.name || payload.name;
+      setBarcodeSuccess(`${successName} を食事履歴に追加しました`);
+      await fetchMeals();
+    } catch (err) {
+      console.error(err);
+      setError(err.message || '保存に失敗しました');
+    } finally {
+      setBarcodeSaving(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!barcodeSuccess) return;
+    const timer = setTimeout(() => setBarcodeSuccess(''), 4000);
+    return () => clearTimeout(timer);
+  }, [barcodeSuccess]);
+
   // --- 単品入力を保存 ---
   const handleSaveMeal = async () => {
-    if (!selectedFood) {
-      setError('食品を選択してください');
-      return;
+    let food = selectedFood;
+    if (!food) {
+      const fallback = await fetchFoodByName(searchQuery.trim());
+      if (!fallback) {
+        setError('入力された食品が見つかりませんでした');
+        return;
+      }
+      food = fallback;
+      setError('');
     }
 
     setSaving(true);
     setError('');
     
     try {
-      const ratio = parseFloat(quantity) / 100;
+      const ratio = parseFloat(quantity || '0') / 100;
       const payload = {
-        name: selectedFood.name,
-        calories: Math.round(selectedFood.calories * ratio),
-        protein: parseFloat((selectedFood.protein * ratio).toFixed(1)),
-        fat: parseFloat((selectedFood.fat * ratio).toFixed(1)),
-        carbs: parseFloat((selectedFood.carbs * ratio).toFixed(1)),
+        name: food.name,
+        calories: Math.round(food.calories * ratio),
+        protein: parseFloat((food.protein * ratio).toFixed(1)),
+        fat: parseFloat((food.fat * ratio).toFixed(1)),
+        carbs: parseFloat((food.carbs * ratio).toFixed(1)),
         category,
         consumed_at: selectedDate,
       };
 
       const res = await fetch(`${API_BASE}/api/meals/`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAuthHeaders(true),
         body: JSON.stringify(payload),
       });
 
-      if (!res.ok) throw new Error('保存に失敗しました');
+      if (!res.ok) {
+        let detail = '保存に失敗しました';
+        try {
+          const body = await res.json();
+          detail = body?.detail || body?.error || detail;
+        } catch (jsonErr) {
+          try {
+            detail = await res.text();
+          } catch (_) {
+            // ignore
+          }
+        }
+        throw new Error(detail || '保存に失敗しました');
+      }
 
       setShowAddModal(false);
       setSearchQuery('');
@@ -242,7 +520,7 @@ export default function MealManagement() {
       setQuantity('100');
       await fetchMeals();
     } catch (err) {
-      setError(err.message);
+      setError(err.message || '保存に失敗しました');
     } finally {
       setSaving(false);
     }
@@ -316,7 +594,7 @@ export default function MealManagement() {
         };
         const res = await fetch(`${API_BASE}/api/meals/`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: buildAuthHeaders(true),
           body: JSON.stringify(payload),
         });
         if (!res.ok) console.error('投稿失敗', item.name);
@@ -374,7 +652,7 @@ export default function MealManagement() {
       };
       const res = await fetch(`${API_BASE}/api/meals/${editingMealId}/`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: buildAuthHeaders(true),
         body: JSON.stringify(payload),
       });
       if (!res.ok) throw new Error('更新失敗');
@@ -392,7 +670,10 @@ export default function MealManagement() {
     if (!mealId) return;
     setDeletingId(mealId);
     try {
-      const res = await fetch(`${API_BASE}/api/meals/${mealId}/`, { method: 'DELETE' });
+      const res = await fetch(`${API_BASE}/api/meals/${mealId}/`, {
+        method: 'DELETE',
+        headers: buildAuthHeaders(),
+      });
       if (!res.ok && res.status !== 204) throw new Error('削除失敗');
       await fetchMeals();
     } catch (e) {
@@ -413,36 +694,36 @@ export default function MealManagement() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 pb-20">
-      <div className="sticky top-0 z-10 bg-white/80 dark:bg-gray-900/80 backdrop-blur-lg border-b border-slate-200 dark:border-gray-700">
+    <div className="min-h-screen bg-gradient-to-br from-[#f8faf9] to-[#e8f5ec] dark:from-zinc-950 dark:to-zinc-950 pb-20 transition-colors">
+      <div className="sticky top-0 z-10 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-lg border-b border-gray-100 dark:border-zinc-800 transition-colors">
         <div className="max-w-2xl mx-auto px-4 py-4">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            <h1 className="text-2xl font-bold text-[#34C759] dark:text-[#00ff41] transition-colors">
               食事管理
             </h1>
             <button
               onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-500 to-blue-600 text-white rounded-full shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
+              className="flex items-center gap-2 px-4 py-2 bg-[#34C759] dark:bg-[#00ff41] hover:bg-[#2fb350] dark:hover:bg-[#00cc33] text-white dark:text-zinc-950 rounded-full shadow-lg hover:shadow-xl transform hover:scale-105 transition-all"
             >
               <Plus size={20} />
               <span className="font-medium">追加</span>
             </button>
           </div>
           
-          <div className="flex items-center justify-between bg-slate-100 dark:bg-gray-800 rounded-2xl p-2">
+          <div className="flex items-center justify-between bg-gray-50 dark:bg-zinc-800 rounded-2xl p-2 transition-colors">
             <button
               onClick={() => changeDate(-1)}
-              className="p-2 hover:bg-white dark:hover:bg-gray-700 rounded-xl transition-colors"
+              className="p-2 hover:bg-white dark:hover:bg-zinc-700 rounded-xl transition-colors text-gray-600 dark:text-zinc-300"
             >
               <ChevronLeft size={20} />
             </button>
-            <div className="flex items-center gap-2 font-medium text-slate-700 dark:text-slate-200">
+            <div className="flex items-center gap-2 font-medium text-gray-700 dark:text-white transition-colors">
               <CalendarDays size={18} />
               {formatDate(selectedDate)}
             </div>
             <button
               onClick={() => changeDate(1)}
-              className="p-2 hover:bg-white dark:hover:bg-gray-700 rounded-xl transition-colors"
+              className="p-2 hover:bg-white dark:hover:bg-zinc-700 rounded-xl transition-colors text-gray-600 dark:text-zinc-300"
             >
               <ChevronRight size={20} />
             </button>
@@ -452,8 +733,8 @@ export default function MealManagement() {
 
       <div className="max-w-2xl mx-auto px-4 py-6 space-y-6">
         {/* Macro Summary Redesigned (Circular stats) */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-lg animate-fadeIn">
-          <div className="text-slate-800 dark:text-slate-100 font-semibold mb-4">今日の栄養バランス</div>
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-5 shadow-lg border border-gray-100 dark:border-zinc-800 animate-fadeIn transition-colors">
+          <div className="text-gray-900 dark:text-white font-semibold mb-4 transition-colors">今日の栄養バランス</div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 justify-items-center">
             <CircularStat label="カロリー" value={Math.round(totals.calories)} goal={goals.calories} unit="kcal" color="#22c55e" />
             <CircularStat label="タンパク質" value={Math.round(totals.protein)} goal={goals.protein} unit="g" color="#fb923c" />
@@ -464,19 +745,19 @@ export default function MealManagement() {
           <div className="mt-6 flex flex-wrap gap-2">
             <button
               onClick={() => setCategoryFilter('all')}
-              className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${categoryFilter==='all' ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 dark:bg-gray-700 text-slate-700 dark:text-slate-300'}`}
+              className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${categoryFilter==='all' ? 'bg-[#34C759] dark:bg-[#00ff41] text-white dark:text-zinc-950 shadow' : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700'}`}
             >全て</button>
             {categoriesOrder.map(cat => (
               <button
                 key={cat}
                 onClick={() => setCategoryFilter(cat)}
-                className={`px-3 py-1.5 rounded-full text-sm font-medium transition ${categoryFilter===cat ? 'bg-blue-600 text-white shadow' : 'bg-slate-100 dark:bg-gray-700 text-slate-700 dark:text-slate-300'}`}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium transition-colors ${categoryFilter===cat ? 'bg-[#34C759] dark:bg-[#00ff41] text-white dark:text-zinc-950 shadow' : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700'}`}
               >{categoryLabels[cat]}</button>
             ))}
           </div>
           {/* Macro highlight filter */}
           <div className="mt-4">
-            <div className="text-xs text-slate-500 dark:text-slate-400 mb-2">マクロハイライト (基準値以上のみ表示)</div>
+            <div className="text-xs text-gray-500 dark:text-zinc-400 mb-2 transition-colors">マクロハイライト (基準値以上のみ表示)</div>
             <div className="flex flex-wrap gap-2">
               {[
                 { key: 'protein', label: 'Protein', sub: '高タンパク' },
@@ -486,7 +767,7 @@ export default function MealManagement() {
                 <button
                   key={btn.key}
                   onClick={() => setMacroFilter(prev => prev === btn.key ? '' : btn.key)}
-                  className={`px-3 py-2 rounded-xl text-sm font-semibold border transition ${macroFilter===btn.key ? 'bg-purple-600 text-white border-purple-500 shadow' : 'bg-white dark:bg-gray-900 border-slate-200 dark:border-gray-700 text-slate-700 dark:text-slate-200'}`}
+                  className={`px-3 py-2 rounded-xl text-sm font-semibold border transition-colors ${macroFilter===btn.key ? 'bg-[#34C759] dark:bg-[#00ff41] text-white dark:text-zinc-950 border-[#34C759] dark:border-[#00ff41] shadow' : 'bg-white dark:bg-zinc-900 border-gray-200 dark:border-zinc-700 text-gray-700 dark:text-zinc-300'}`}
                 >
                   <div>{btn.label}</div>
                   <div className="text-[10px] opacity-80">{btn.sub} ≥ {MACRO_THRESHOLDS[btn.key]}g</div>
@@ -495,7 +776,7 @@ export default function MealManagement() {
               {macroFilter && (
                 <button
                   onClick={() => setMacroFilter('')}
-                  className="px-3 py-2 rounded-xl text-sm font-semibold border border-slate-300 text-slate-600 dark:text-slate-300"
+                  className="px-3 py-2 rounded-xl text-sm font-semibold border border-gray-300 dark:border-zinc-600 text-gray-600 dark:text-zinc-300 hover:bg-gray-100 dark:hover:bg-zinc-800 transition-colors"
                 >解除</button>
               )}
             </div>
@@ -504,27 +785,27 @@ export default function MealManagement() {
             const ct = categoryTotals(categoryFilter);
             const pctCal = Math.min(100, Math.round((ct.calories / goals.calories) * 100));
             return (
-              <div className="mt-4 p-4 rounded-xl bg-gradient-to-br from-slate-50 to-slate-100 dark:from-gray-900 dark:to-gray-800 border border-slate-200 dark:border-gray-700">
+              <div className="mt-4 p-4 rounded-xl bg-gradient-to-br from-gray-50 to-gray-100 dark:from-zinc-800 dark:to-zinc-800/80 border border-gray-200 dark:border-zinc-700 transition-colors">
                 <div className="flex items-center justify-between mb-2">
-                  <div className="text-sm font-semibold text-slate-700 dark:text-slate-200">{categoryLabels[categoryFilter]} 合計 (件数 {ct.count})</div>
-                  <div className="text-xs text-slate-500">{pctCal}% of daily kcal</div>
+                  <div className="text-sm font-semibold text-gray-700 dark:text-white transition-colors">{categoryLabels[categoryFilter]} 合計 (件数 {ct.count})</div>
+                  <div className="text-xs text-gray-500 dark:text-zinc-400 transition-colors">{pctCal}% of daily kcal</div>
                 </div>
                 <div className="grid grid-cols-4 gap-2 text-center">
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <div className="text-[10px] text-slate-500">kcal</div>
-                    <div className="font-bold text-slate-800 dark:text-slate-100">{ct.calories}</div>
+                  <div className="bg-white dark:bg-zinc-900 rounded-lg p-2 transition-colors">
+                    <div className="text-[10px] text-gray-500 dark:text-zinc-400">kcal</div>
+                    <div className="font-bold text-gray-900 dark:text-white">{ct.calories}</div>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <div className="text-[10px] text-slate-500">P(g)</div>
+                  <div className="bg-white dark:bg-zinc-900 rounded-lg p-2 transition-colors">
+                    <div className="text-[10px] text-gray-500 dark:text-zinc-400">P(g)</div>
                     <div className="font-bold text-orange-600 dark:text-orange-400">{ct.protein.toFixed(1)}</div>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <div className="text-[10px] text-slate-500">F(g)</div>
+                  <div className="bg-white dark:bg-zinc-900 rounded-lg p-2 transition-colors">
+                    <div className="text-[10px] text-gray-500 dark:text-zinc-400">F(g)</div>
                     <div className="font-bold text-yellow-600 dark:text-yellow-400">{ct.fat.toFixed(1)}</div>
                   </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <div className="text-[10px] text-slate-500">C(g)</div>
-                    <div className="font-bold text-green-600 dark:text-green-400">{ct.carbs.toFixed(1)}</div>
+                  <div className="bg-white dark:bg-zinc-900 rounded-lg p-2 transition-colors">
+                    <div className="text-[10px] text-gray-500 dark:text-zinc-400">C(g)</div>
+                    <div className="font-bold text-[#34C759] dark:text-[#00ff41]">{ct.carbs.toFixed(1)}</div>
                   </div>
                 </div>
               </div>
@@ -532,32 +813,162 @@ export default function MealManagement() {
           })()}
         </div>
         {/* Daily Evaluation Card */}
-        <div className="bg-white dark:bg-gray-800 rounded-2xl p-5 shadow-lg flex items-start gap-4 animate-fadeIn">
-          <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-green-400 to-emerald-500 text-white shadow-inner">
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-5 shadow-lg border border-gray-100 dark:border-zinc-800 flex items-start gap-4 animate-fadeIn transition-colors">
+          <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-[#34C759] to-[#30D158] dark:from-[#00ff41] dark:to-[#00cc33] text-white dark:text-zinc-950 shadow-inner">
             {dayEval.status === 'good' && <Award size={28} />}
             {dayEval.status === 'ok' && <TrendingUp size={28} />}
             {dayEval.status === 'poor' && <AlertTriangle size={28} />}
-            {dayEval.status === 'empty' && <Sparkles size={28} className="text-yellow-300" />}
+            {dayEval.status === 'empty' && <Sparkles size={28} className="text-yellow-300 dark:text-yellow-400" />}
           </div>
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1">
-              <h2 className="text-lg font-semibold text-slate-800 dark:text-slate-100">今日の評価</h2>
-              <div className="text-xs px-2 py-1 rounded-full bg-slate-100 dark:bg-gray-700 text-slate-600 dark:text-slate-300">スコア {dayEval.dayScore}</div>
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white transition-colors">今日の評価</h2>
+              <div className="text-xs px-2 py-1 rounded-full bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-zinc-300 transition-colors">スコア {dayEval.dayScore}</div>
             </div>
-            <p className="text-sm text-slate-600 dark:text-slate-400 mb-2">{dayEval.message}</p>
+            <p className="text-sm text-gray-600 dark:text-zinc-400 mb-2 transition-colors">{dayEval.message}</p>
             <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="bg-slate-50 dark:bg-gray-700 rounded-lg p-2">
-                <div className="font-medium text-slate-700 dark:text-slate-300 mb-1">カロリー進捗</div>
+              <div className="bg-gray-50 dark:bg-zinc-800 rounded-lg p-2 transition-colors">
+                <div className="font-medium text-gray-700 dark:text-zinc-300 mb-1 transition-colors">カロリー進捗</div>
                 <Progress value={dayEval.pctCal} className="h-2 mb-1" />
-                <div className="text-[10px] text-slate-500">{totals.calories} / {goals.calories} kcal ({dayEval.pctCal}%)</div>
+                <div className="text-[10px] text-gray-500 dark:text-zinc-500">{totals.calories} / {goals.calories} kcal ({dayEval.pctCal}%)</div>
               </div>
-              <div className="bg-slate-50 dark:bg-gray-700 rounded-lg p-2">
-                <div className="font-medium text-slate-700 dark:text-slate-300 mb-1">マクロバランス</div>
+              <div className="bg-gray-50 dark:bg-zinc-800 rounded-lg p-2 transition-colors">
+                <div className="font-medium text-gray-700 dark:text-zinc-300 mb-1 transition-colors">マクロバランス</div>
                 <Progress value={dayEval.macroBalanceScore} className="h-2 mb-1" />
-                <div className="text-[10px] text-slate-500">P {totals.protein}/{goals.protein} F {totals.fat}/{goals.fat} C {totals.carbs}/{goals.carbs}</div>
+                <div className="text-[10px] text-gray-500 dark:text-zinc-500">P {totals.protein}/{goals.protein} F {totals.fat}/{goals.fat} C {totals.carbs}/{goals.carbs}</div>
               </div>
             </div>
           </div>
+        </div>
+
+        <div className="bg-white dark:bg-zinc-900 rounded-2xl p-5 shadow-lg border border-gray-100 dark:border-zinc-800 animate-fadeIn transition-colors">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+            <div>
+              <div className="text-lg font-semibold text-gray-900 dark:text-white transition-colors">バーコードで素早く記録</div>
+              <p className="text-sm text-gray-500 dark:text-zinc-400 transition-colors">カメラで読み取るだけでP / F / Cが自動入力されます</p>
+            </div>
+            <button
+              type="button"
+              onClick={openScanner}
+              className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-full bg-[#34C759] dark:bg-[#00ff41] hover:bg-[#2fb350] dark:hover:bg-[#00cc33] text-white dark:text-zinc-950 font-semibold shadow hover:shadow-lg transition-all"
+            >
+              <ScanLine size={18} />
+              カメラを起動
+            </button>
+          </div>
+          <div
+            className="mt-4 border-2 border-dashed border-[#34C759]/40 dark:border-[#00ff41]/40 rounded-3xl p-6 text-center text-gray-600 dark:text-zinc-300 cursor-pointer hover:bg-[#34C759]/5 dark:hover:bg-[#00ff41]/10 transition-colors"
+            onClick={openScanner}
+          >
+            <ScanLine size={40} className="mx-auto text-[#34C759] dark:text-[#00ff41]" />
+            <div className="mt-2 font-semibold text-gray-700 dark:text-white transition-colors">バーコードスキャン</div>
+            <p className="text-xs text-gray-500 dark:text-zinc-400">商品のバーコードをスキャンしてPFCデータを確認</p>
+          </div>
+          <div className="mt-4 flex flex-col sm:flex-row gap-2">
+            <input
+              type="text"
+              value={manualBarcode}
+              onChange={(e) => setManualBarcode(e.target.value)}
+              placeholder="バーコード番号を手入力"
+              className="flex-1 px-4 py-3 rounded-xl border border-gray-200 dark:border-zinc-700 bg-gray-50 dark:bg-zinc-800 text-gray-900 dark:text-white text-sm placeholder:text-gray-400 dark:placeholder:text-zinc-500 transition-colors"
+            />
+            <button
+              type="button"
+              onClick={handleManualBarcodeLookup}
+              className="px-4 py-3 rounded-xl bg-gray-900 dark:bg-zinc-700 text-white text-sm font-semibold hover:bg-gray-700 dark:hover:bg-zinc-600 transition-colors"
+            >検索</button>
+          </div>
+          {barcodeStatus === 'loading' && (
+            <div className="mt-4 flex items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+              <Loader2 className="animate-spin" size={20} />
+              栄養情報を取得しています...
+            </div>
+          )}
+          {barcodeStatus === 'error' && barcodeError && (
+            <div className="mt-4 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 text-sm text-red-600 dark:text-red-300">
+              {barcodeError}
+            </div>
+          )}
+          {barcodeSuccess && (
+            <div className="mt-4 p-4 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 text-sm text-emerald-700 dark:text-emerald-300">
+              {barcodeSuccess}
+            </div>
+          )}
+          {barcodeStatus === 'result' && barcodeProduct && (
+            <div className="mt-5 space-y-4 border border-[#34C759]/30 dark:border-[#00ff41]/30 rounded-2xl p-4 bg-[#34C759]/5 dark:bg-[#00ff41]/10 transition-colors">
+              <div className="flex items-center gap-3">
+                {barcodeProduct.image ? (
+                  <img src={barcodeProduct.image} alt={barcodeProduct.name} className="w-16 h-16 rounded-xl object-cover border border-white dark:border-zinc-700 shadow" />
+                ) : (
+                  <div className="w-16 h-16 rounded-xl bg-white/60 dark:bg-zinc-800 flex items-center justify-center text-gray-400 dark:text-zinc-500">N/A</div>
+                )}
+                <div>
+                  <div className="font-semibold text-gray-900 dark:text-white transition-colors">{barcodeProduct.name}</div>
+                  <div className="text-xs text-gray-500 dark:text-zinc-400">{barcodeProduct.brand || 'ブランド情報なし'} / {barcodeProduct.barcode}</div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-slate-400">食品名</label>
+                  <input
+                    type="text"
+                    value={barcodeForm.name}
+                    onChange={(e) => handleBarcodeFieldChange('name', e.target.value)}
+                    className="w-full mt-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-slate-400">摂取量 (g / ml)</label>
+                  <input
+                    type="number"
+                    value={barcodeServing}
+                    onChange={(e) => handleBarcodeServingChange(e.target.value)}
+                    className="w-full mt-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                    min="1"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { key: 'calories', label: 'kcal' },
+                  { key: 'protein', label: 'P (g)' },
+                  { key: 'fat', label: 'F (g)' },
+                  { key: 'carbs', label: 'C (g)' },
+                ].map((field) => (
+                  <div key={field.key}>
+                    <label className="text-xs text-slate-500 dark:text-slate-400">{field.label}</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={barcodeForm[field.key]}
+                      onChange={(e) => handleBarcodeFieldChange(field.key, e.target.value)}
+                      className="w-full mt-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
+                    />
+                  </div>
+                ))}
+              </div>
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                保存先: {categoryLabels[category]} / 日付: {formatDate(selectedDate)}
+                <span className="block text-[11px] text-emerald-600 dark:text-emerald-300 mt-1">保存すると食事履歴とSupabaseに即時反映されます</span>
+              </div>
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={handleSaveBarcodeMeal}
+                  disabled={barcodeSaving}
+                  className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-emerald-500 text-white font-semibold shadow hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  {barcodeSaving ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
+                  食事履歴に追加
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSkipScannedItem}
+                  className="px-4 py-3 rounded-xl border border-slate-200 dark:border-gray-700 text-sm text-slate-600 dark:text-slate-200"
+                >保存せずにスキャンを続ける</button>
+              </div>
+            </div>
+          )}
         </div>
         {/* Old summary grid replaced by circular stats above */}
 
@@ -581,7 +992,7 @@ export default function MealManagement() {
             displayedMeals.map((meal, idx) => (
               <div
                 key={meal.id}
-                className="bg-white dark:bg-gray-800 rounded-2xl p-4 shadow-md hover:shadow-lg transition-all animate-slideUp"
+                className="bg-white dark:bg-zinc-900 rounded-2xl p-4 shadow-md hover:shadow-lg border border-gray-100 dark:border-zinc-800 transition-all animate-slideUp"
                 style={{ animationDelay: `${idx * 0.05}s` }}
               >
                 {editingMealId === meal.id ? (
@@ -693,11 +1104,11 @@ export default function MealManagement() {
       {showAddModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 animate-fadeIn">
           <div
-            className="bg-white dark:bg-gray-800 rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp"
+            className="bg-white dark:bg-zinc-900 rounded-t-3xl sm:rounded-3xl w-full max-w-lg max-h-[90vh] overflow-y-auto animate-slideUp border border-gray-100 dark:border-zinc-800 transition-colors"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="sticky top-0 bg-white dark:bg-gray-800 border-b border-slate-200 dark:border-gray-700 px-6 py-4 flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-800 dark:text-slate-100">食事を追加</h2>
+            <div className="sticky top-0 bg-white dark:bg-zinc-900 border-b border-gray-200 dark:border-zinc-800 px-6 py-4 flex items-center justify-between transition-colors">
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white transition-colors">食事を追加</h2>
               <button
                 onClick={() => {
                   setShowAddModal(false);
@@ -705,7 +1116,7 @@ export default function MealManagement() {
                   setSelectedFood(null);
                   setError('');
                 }}
-                className="p-2 hover:bg-slate-100 dark:hover:bg-gray-700 rounded-full transition-colors"
+                className="p-2 hover:bg-gray-100 dark:hover:bg-zinc-800 rounded-full transition-colors text-gray-600 dark:text-zinc-300"
               >
                 <X size={20} />
               </button>
@@ -714,11 +1125,11 @@ export default function MealManagement() {
             <div className="p-6 space-y-4">
               <div>
                 <div className="flex flex-wrap gap-2 mb-4 text-sm">
-                  {[{ key: 'single', label: 'Single' }, { key: 'bulk', label: 'Bulk' }].map(btn => (
+                  {[{ key: 'single', label: '単品入力' }, { key: 'bulk', label: '一括入力' }].map(btn => (
                     <button
                       key={btn.key}
                       onClick={() => setAddMode(btn.key)}
-                      className={`px-3 py-2 rounded-lg font-medium transition-colors ${addMode === btn.key ? 'bg-blue-600 text-white shadow' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-slate-300'}`}
+                      className={`px-3 py-2 rounded-lg font-medium transition-colors ${addMode === btn.key ? 'bg-[#34C759] dark:bg-[#00ff41] text-white dark:text-zinc-950 shadow' : 'bg-gray-200 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-300 dark:hover:bg-zinc-700'}`}
                     >
                       {btn.label}
                     </button>
@@ -726,32 +1137,32 @@ export default function MealManagement() {
                 </div>
                 {addMode === 'single' && (
                   <>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-zinc-300 mb-2 transition-colors">
                       食品を検索
                     </label>
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 dark:text-zinc-500" size={20} />
                       <input
                         type="text"
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
                         placeholder="食品名を入力..."
-                        className="w-full pl-10 pr-4 py-3 bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                        className="w-full pl-10 pr-4 py-3 bg-gray-50 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-gray-900 dark:text-white placeholder:text-gray-400 dark:placeholder:text-zinc-500 rounded-xl focus:ring-2 focus:ring-[#34C759] dark:focus:ring-[#00ff41] focus:border-transparent transition-all"
                       />
                       {searchLoading && (
-                        <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-blue-500" size={20} />
+                        <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 animate-spin text-[#34C759] dark:text-[#00ff41]" size={20} />
                       )}
                     </div>
                     {searchResults.length > 0 && (
-                      <div className="mt-2 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden animate-scaleIn">
+                      <div className="mt-2 bg-white dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 rounded-xl shadow-xl overflow-hidden animate-scaleIn">
                         {searchResults.map((food, idx) => (
                           <button
                             key={idx}
                             onClick={() => selectFood(food)}
-                            className="w-full px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-gray-800 transition-colors border-b border-slate-100 dark:border-gray-800 last:border-0"
+                            className="w-full px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-zinc-700 transition-colors border-b border-gray-100 dark:border-zinc-700 last:border-0"
                           >
-                            <div className="font-medium text-slate-800 dark:text-slate-100">{food.name}</div>
-                            <div className="text-sm text-slate-500 mt-1">
+                            <div className="font-medium text-gray-900 dark:text-white">{food.name}</div>
+                            <div className="text-sm text-gray-500 dark:text-zinc-400 mt-1">
                               {food.calories}kcal / P:{food.protein}g F:{food.fat}g C:{food.carbs}g ({food.per})
                             </div>
                           </button>
@@ -759,9 +1170,9 @@ export default function MealManagement() {
                       </div>
                     )}
                     {selectedFood && (
-                      <div className="mt-3 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-xl border border-blue-200 dark:border-blue-800 animate-scaleIn">
-                        <div className="font-semibold text-blue-900 dark:text-blue-100 mb-2">{selectedFood.name}</div>
-                        <div className="text-sm text-blue-700 dark:text-blue-300">
+                      <div className="mt-3 p-4 bg-[#34C759]/10 dark:bg-[#00ff41]/10 rounded-xl border border-[#34C759]/20 dark:border-[#00ff41]/20 animate-scaleIn transition-colors">
+                        <div className="font-semibold text-[#34C759] dark:text-[#00ff41] mb-2">{selectedFood.name}</div>
+                        <div className="text-sm text-gray-600 dark:text-zinc-400">
                           {selectedFood.per}あたり: {selectedFood.calories}kcal / P:{selectedFood.protein}g F:{selectedFood.fat}g C:{selectedFood.carbs}g
                         </div>
                       </div>
@@ -828,8 +1239,8 @@ export default function MealManagement() {
                       onClick={() => setCategory(cat)}
                       className={`px-4 py-3 rounded-xl font-medium transition-all ${
                         category === cat
-                          ? 'bg-gradient-to-r from-blue-500 to-blue-600 text-white shadow-lg'
-                          : 'bg-slate-100 dark:bg-gray-700 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-gray-600'
+                          ? 'bg-[#34C759] dark:bg-[#00ff41] text-white dark:text-zinc-950 shadow-lg'
+                          : 'bg-gray-100 dark:bg-zinc-800 text-gray-700 dark:text-zinc-300 hover:bg-gray-200 dark:hover:bg-zinc-700'
                       }`}
                     >
                       {cat === 'breakfast' && '朝食'}
@@ -869,8 +1280,8 @@ export default function MealManagement() {
               {addMode === 'single' && (
                 <button
                   onClick={handleSaveMeal}
-                  disabled={!selectedFood || saving}
-                  className="w-full py-4 bg-gradient-to-r from-blue-500 to-blue-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                  disabled={saving || (!selectedFood && !searchQuery.trim())}
+                  className="w-full py-4 bg-[#34C759] dark:bg-[#00ff41] hover:bg-[#2fb350] dark:hover:bg-[#00cc33] text-white dark:text-zinc-950 font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                 >
                   {saving ? (
                     <>
@@ -889,7 +1300,7 @@ export default function MealManagement() {
                 <button
                   onClick={bulkAddMeals}
                   disabled={saving || multiParsing || !multiItems.some(i => !i.error)}
-                  className="w-full py-4 bg-gradient-to-r from-green-500 to-green-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
+                  className="w-full py-4 bg-[#34C759] dark:bg-[#00ff41] hover:bg-[#2fb350] dark:hover:bg-[#00cc33] text-white dark:text-zinc-950 font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02] active:scale-[0.98] transition-all flex items-center justify-center gap-2"
                 >
                   {saving ? (
                     <>
@@ -907,6 +1318,12 @@ export default function MealManagement() {
             </div>
           </div>
         </div>
+      )}
+      {scannerOpen && (
+        <BarcodeScannerModal
+          onClose={() => setScannerOpen(false)}
+          onDetected={handleBarcodeDetected}
+        />
       )}
     </div>
   );

@@ -1,4 +1,5 @@
-import React, { useMemo } from 'react'
+// 栄養グラフ（P/F/Cとカロリー）
+import React, { useMemo, useEffect, useState } from 'react'
 import { Bar, Line } from 'react-chartjs-2'
 import {
   Chart as ChartJS,
@@ -12,8 +13,23 @@ import {
   Filler,
 } from 'chart.js'
 
+// Chart.js の機能を登録
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Tooltip, Legend, Filler)
 
+// ダークモードの検出フック
+function useThemeDetection() {
+  const [isDark, setIsDark] = useState(false)
+  useEffect(() => {
+    const check = () => setIsDark(document.documentElement.classList.contains('dark'))
+    check()
+    const observer = new MutationObserver(check)
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+    return () => observer.disconnect()
+  }, [])
+  return isDark
+}
+
+// グラフで使う色
 const COLORS = {
   protein: 'rgba(54, 162, 235, 0.75)', // blue
   fat: 'rgba(255, 159, 64, 0.75)',     // orange
@@ -21,7 +37,7 @@ const COLORS = {
   kcal: 'rgba(153, 102, 255, 0.9)',    // purple
 }
 
-// Helper: format date as YYYY-MM-DD
+// 日付をYYYY-MM-DDに変換する
 function dayKey(d){
   const y = d.getFullYear()
   const m = String(d.getMonth()+1).padStart(2,'0')
@@ -29,9 +45,11 @@ function dayKey(d){
   return `${y}-${m}-${dd}`
 }
 
+// 1日の開始/終了時刻を作る
 function startOfDay(d){ const n = new Date(d); n.setHours(0,0,0,0); return n }
 function endOfDay(d){ const n = new Date(d); n.setHours(23,59,59,999); return n }
 
+// 直近n日分の日付配列を作る
 function rangeDays(n){
   const today = startOfDay(new Date())
   const days = []
@@ -42,12 +60,13 @@ function rangeDays(n){
   return days
 }
 
+// 指定した期間に含まれるか判定
 function within(ts, start, end){
   const t = ts ? new Date(ts) : new Date()
   return t >= start && t <= end
 }
 
-// Aggregate functions
+// データを集計してグラフ用に整形する
 function aggregate(history, range){
   const now = new Date()
   if (!Array.isArray(history) || history.length === 0){
@@ -104,8 +123,10 @@ function aggregate(history, range){
   }
 }
 
+// 小数第1位まで丸める
 function round1(n){ return Math.round(n*10)/10 }
 
+// ラベルを表示用に変換する
 function formatLabels(range, labels){
   if (!Array.isArray(labels) || labels.length === 0) return []
   if (range === 'day') return labels
@@ -122,85 +143,77 @@ function formatLabels(range, labels){
   })
 }
 
-export default function NutritionCharts({ history, range='week', proteinGoal=0 }){
-  const dataAgg = useMemo(()=> aggregate(history || [], range), [history, range])
-  const empty = (dataAgg.labels || []).length === 0
+const buildBarData = ({ labels, dataAgg, proteinGoal }) => ({
+  labels,
+  datasets: [
+    {
+      type: 'bar',
+      label: 'P (g)',
+      data: dataAgg.protein,
+      yAxisID: 'y1',
+      backgroundColor: COLORS.protein,
+      borderColor: 'rgba(54, 162, 235, 1)',
+      borderWidth: 1,
+      stack: 'pfc',
+      borderRadius: 6,
+      order: 0,
+    },
+    {
+      type: 'bar',
+      label: 'F (g)',
+      data: dataAgg.fat,
+      yAxisID: 'y1',
+      backgroundColor: COLORS.fat,
+      borderColor: 'rgba(255, 159, 64, 1)',
+      borderWidth: 1,
+      stack: 'pfc',
+      borderRadius: 6,
+      order: 0,
+    },
+    {
+      type: 'bar',
+      label: 'C (g)',
+      data: dataAgg.carbs,
+      yAxisID: 'y1',
+      backgroundColor: COLORS.carbs,
+      borderColor: 'rgba(75, 192, 192, 1)',
+      borderWidth: 1,
+      stack: 'pfc',
+      borderRadius: 6,
+      order: 0,
+    },
+    {
+      type: 'line',
+      label: 'カロリー (kcal)',
+      data: dataAgg.kcal,
+      yAxisID: 'y2',
+      borderColor: COLORS.kcal,
+      backgroundColor: 'rgba(153, 102, 255, 0.15)',
+      fill: true,
+      tension: 0.35,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      order: 2,
+    },
+    ...(proteinGoal > 0 ? [{
+      type: 'line',
+      label: `P目標 ${proteinGoal}g`,
+      data: dataAgg.labels.map(() => proteinGoal),
+      yAxisID: 'y1',
+      borderColor: 'rgba(255,0,0,0.7)',
+      backgroundColor: 'rgba(0,0,0,0)',
+      borderDash: [6,4],
+      pointRadius: 0,
+      tension: 0,
+      order: 1,
+    }] : [])
+  ]
+})
 
-  if (empty){
-    return <div className="muted small">データがありません。食事を記録するとここに表示されます。</div>
-  }
-
-  const labels = formatLabels(range, dataAgg.labels)
-
-  const barData = {
-    labels,
-    datasets: [
-      {
-        type: 'bar',
-        label: 'P (g)',
-        data: dataAgg.protein,
-        yAxisID: 'y1',
-        backgroundColor: COLORS.protein,
-        borderColor: 'rgba(54, 162, 235, 1)',
-        borderWidth: 1,
-        stack: 'pfc',
-        borderRadius: 6,
-        order: 0,
-      },
-      {
-        type: 'bar',
-        label: 'F (g)',
-        data: dataAgg.fat,
-        yAxisID: 'y1',
-        backgroundColor: COLORS.fat,
-        borderColor: 'rgba(255, 159, 64, 1)',
-        borderWidth: 1,
-        stack: 'pfc',
-        borderRadius: 6,
-        order: 0,
-      },
-      {
-        type: 'bar',
-        label: 'C (g)',
-        data: dataAgg.carbs,
-        yAxisID: 'y1',
-        backgroundColor: COLORS.carbs,
-        borderColor: 'rgba(75, 192, 192, 1)',
-        borderWidth: 1,
-        stack: 'pfc',
-        borderRadius: 6,
-        order: 0,
-      },
-      {
-        type: 'line',
-        label: 'カロリー (kcal)',
-        data: dataAgg.kcal,
-        yAxisID: 'y2',
-        borderColor: COLORS.kcal,
-        backgroundColor: 'rgba(153, 102, 255, 0.15)',
-        fill: true,
-        tension: 0.35,
-        pointRadius: 3,
-        pointHoverRadius: 5,
-        order: 2,
-      },
-      ...(proteinGoal > 0 ? [{
-        type: 'line',
-        label: `P目標 ${proteinGoal}g`,
-        data: dataAgg.labels.map(()=> proteinGoal),
-        yAxisID: 'y1',
-        borderColor: 'rgba(255,0,0,0.7)',
-        backgroundColor: 'rgba(0,0,0,0)',
-        borderDash: [6,4],
-        pointRadius: 0,
-        tension: 0,
-        order: 1,
-      }] : [])
-    ]
-  }
-
-  // lineData no longer needed separately since we use mixed chart
-
+const buildStackedOptions = (isDark) => {
+  const textColor = isDark ? '#a1a1aa' : '#6b7280'
+  const gridColor = isDark ? '#27272a' : '#e5e7eb'
+  
   const commonOptions = {
     responsive: true,
     maintainAspectRatio: false,
@@ -209,25 +222,85 @@ export default function NutritionCharts({ history, range='week', proteinGoal=0 }
       easing: 'easeOutQuart',
     },
     plugins: {
-      legend: { position: 'top', labels: { boxWidth: 12 } },
-      tooltip: { mode: 'index', intersect: false },
+      legend: { 
+        position: 'top', 
+        labels: { 
+          boxWidth: 12,
+          color: textColor 
+        } 
+      },
+      tooltip: { 
+        mode: 'index', 
+        intersect: false,
+        backgroundColor: isDark ? '#18181b' : 'white',
+        titleColor: isDark ? '#fafafa' : '#1a1a1a',
+        bodyColor: isDark ? '#a1a1aa' : '#6b7280',
+        borderColor: isDark ? '#27272a' : '#e5e7eb',
+        borderWidth: 1,
+      },
     },
     scales: {
-      x: { grid: { display: false } },
-      y1: { beginAtZero: true, position: 'left', title: { display: true, text: 'P/F/C (g)' } },
-      y2: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'kcal' } },
+      x: { 
+        grid: { display: false },
+        ticks: { color: textColor }
+      },
+      y1: { 
+        beginAtZero: true, 
+        position: 'left', 
+        title: { display: true, text: 'P/F/C (g)', color: textColor },
+        ticks: { color: textColor },
+        grid: { color: gridColor }
+      },
+      y2: { 
+        beginAtZero: true, 
+        position: 'right', 
+        grid: { drawOnChartArea: false }, 
+        title: { display: true, text: 'kcal', color: textColor },
+        ticks: { color: textColor }
+      },
     },
     interaction: { mode: 'nearest', axis: 'x', intersect: false }
   }
 
-  const stackedOptions = {
+  return {
     ...commonOptions,
     scales: {
-      x: { stacked: true, grid: { display: false } },
-      y1: { stacked: true, beginAtZero: true, position: 'left', title: { display: true, text: 'P/F/C (g)' } },
+      x: { 
+        stacked: true, 
+        grid: { display: false },
+        ticks: { color: textColor }
+      },
+      y1: { 
+        stacked: true, 
+        beginAtZero: true, 
+        position: 'left', 
+        title: { display: true, text: 'P/F/C (g)', color: textColor },
+        ticks: { color: textColor },
+        grid: { color: gridColor }
+      },
       y2: commonOptions.scales.y2,
     },
   }
+}
+
+// 栄養（P/F/C）とカロリーのグラフ
+export default function NutritionCharts({ history, range='week', proteinGoal=0 }){
+  // ダークモード検出
+  const isDark = useThemeDetection()
+  // データの集計結果をメモ化
+  const dataAgg = useMemo(()=> aggregate(history || [], range), [history, range])
+  const empty = (dataAgg.labels || []).length === 0
+
+  if (empty){
+    return <div className="text-sm text-gray-500 dark:text-zinc-400 transition-colors">データがありません。食事を記録するとここに表示されます。</div>
+  }
+
+  const labels = formatLabels(range, dataAgg.labels)
+
+  // 棒グラフ + 折れ線グラフのデータ
+  const barData = buildBarData({ labels, dataAgg, proteinGoal })
+  // 積み上げ表示用オプション (ダークモード対応)
+  const stackedOptions = buildStackedOptions(isDark)
 
   return (
     <div>

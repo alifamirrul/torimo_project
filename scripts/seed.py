@@ -1,23 +1,7 @@
-import os, sys
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, BASE_DIR)
-os.environ.setdefault('DJANGO_SETTINGS_MODULE','torimo.settings')
-import django
-django.setup()
-from torimoApp.models import Exercise, Meal, DailyLog
-from datetime import date
-
-if Exercise.objects.count()==0:
-    Exercise.objects.create(name='Running', duration_minutes=30, calories_burned=300)
-    Exercise.objects.create(name='Cycling', duration_minutes=45, calories_burned=400)
-if Meal.objects.count()==0:
-    Meal.objects.create(name='Oatmeal', calories=350, category='breakfast')
-    Meal.objects.create(name='Chicken Salad', calories=450, category='lunch')
-if DailyLog.objects.count()==0:
-    e = Exercise.objects.first()
-    m = Meal.objects.first()
-    log = DailyLog.objects.create(date=date.today(), notes='Sample log')
-    log.exercises.add(e)
-    log.meals.add(m)
-
-print('Sample data ensured')
+import os, sys  # 標準ライブラリを読み込み
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # プロジェクトルートを取得
+sys.path.insert(0, BASE_DIR)  # ルートを検索パスに追加
+os.environ.setdefault('DJANGO_SETTINGS_MODULE','torimo.settings')  # Django設定を指定
+import django  # Django本体を読み込み
+django.setup()  # Djangoを初期化
+print('Supabase now stores all meals/exercises/logs. Seed data via Supabase SQL or the dashboard.')  # 注意メッセージを出力

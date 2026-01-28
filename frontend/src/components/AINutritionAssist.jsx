@@ -1,3 +1,4 @@
+// AI栄養アシスト
 import React, { useState, useRef } from 'react'
 import './MealManagement.css'
 
@@ -75,7 +76,7 @@ export default function AINutritionAssist({ onBack, userProfile }) {
         <h1 style={{margin:0}}>AI栄養アシスト</h1>
       </div>
       <div className="meals-container">
-        <div className="card" style={{background:'linear-gradient(135deg,#34C759,#30D158)', color:'#fff'}}>
+        <div className="card ai-gradient-card">
           <div style={{display:'flex', alignItems:'center', gap:12}}>
             <div style={{fontSize:30}}>✨</div>
             <div>
@@ -89,8 +90,8 @@ export default function AINutritionAssist({ onBack, userProfile }) {
           <div ref={listRef} style={{display:'flex', flexDirection:'column', gap:10, maxHeight:360, overflowY:'auto', paddingRight:4}}>
             <div className="small muted" style={{marginBottom:4}}>プロフィール: {userProfile?.height_cm}cm / {userProfile?.weight_kg}kg / 目標 {userProfile?.goal_calories}kcal</div>
             {messages.map((m,i)=>(
-              <div key={i} className="comment-box" style={{background: m.role==='assistant'? '#f6faf7':'#eef6ff', borderColor: m.role==='assistant'? '#e3f2e7':'#c9e2ff'}}>
-                <div style={{fontSize:11, fontWeight:600, marginBottom:4, color:'#374151'}}>{m.role==='assistant'?'アシスタント':'あなた'}</div>
+              <div key={i} className={`comment-box ${m.role==='assistant'?'ai-message':'user-message'}`}>
+                <div className="message-sender">{m.role==='assistant'?'アシスタント':'あなた'}</div>
                 <div style={{whiteSpace:'pre-wrap'}}>{m.content}</div>
               </div>
             ))}

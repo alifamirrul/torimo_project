@@ -30,9 +30,27 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Override via environment variable in .env: DJANGO_SECRET_KEY=...
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY', 'django-reset-secret-key')
-DEBUG = True
-# Development: allow LAN access (restrict in production)
-ALLOWED_HOSTS = ['*']
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    v = os.environ.get(name)
+    if v is None:
+        return default
+    return str(v).strip().lower() in {'1', 'true', 'yes', 'y', 'on'}
+
+
+# Keep local dev convenient, but don't hard-code insecure production defaults.
+DEBUG = _env_bool('DEBUG', True)
+
+# Comma-separated hosts, e.g. "example.com,api.example.com".
+# Defaults to local-only hosts.
+_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS') or os.environ.get('ALLOWED_HOSTS')
+if _hosts:
+    ALLOWED_HOSTS = [h.strip() for h in _hosts.split(',') if h.strip()]
+elif DEBUG:
+    # In debug mode allow any host so phones/tablets on the LAN can hit the dev server
+    ALLOWED_HOSTS = ['*']
+else:
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '[::1]']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -48,6 +66,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
+    'torimo.middleware.supabase_auth.SupabaseAuthMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -88,8 +107,33 @@ STATIC_URL = 'static/'
 STATICFILES_DIRS = [BASE_DIR / 'torimoApp' / 'static']
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# URL for the Vite dev server when running the frontend separately.
+FRONTEND_DEV_SERVER_URL = os.environ.get('FRONTEND_DEV_SERVER_URL', 'http://localhost:5173/')
+
 # Development CORS setting for React dev server. Restrict in production.
-CORS_ALLOW_ALL_ORIGINS = True
+# Allow-all must be explicitly opted in, but default to permissive when DEBUG to make LAN testing easy.
+CORS_ALLOW_ALL_ORIGINS = _env_bool('CORS_ALLOW_ALL_ORIGINS', False)
+
+# Default to Vite dev server origins (allow multiple ports like 5173/5174).
+_cors = os.environ.get('CORS_ALLOWED_ORIGINS', '')
+_cors_list = [o.strip() for o in _cors.split(',') if o.strip()]
+_default_cors = [
+    f'http://localhost:{port}' for port in (5173, 5174, 4173, 4174)
+] + [
+    f'http://127.0.0.1:{port}' for port in (5173, 5174, 4173, 4174)
+]
+CORS_ALLOWED_ORIGINS = list(dict.fromkeys(_default_cors + _cors_list))
+
+if DEBUG and not _cors_list and not CORS_ALLOW_ALL_ORIGINS:
+    # When developing locally, default to allowing every origin so devices on the
+    # same Wi-Fi can hit the API without additional settings.
+    CORS_ALLOW_ALL_ORIGINS = True
+
+# Allow any localhost/127.0.0.1 port via regex so hot-reload ports keep working in dev.
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r'^https?://localhost(?::\d+)?$',
+    r'^https?://127\.0\.0\.1(?::\d+)?$',
+]
 
 # Django REST Framework default settings (basic)
 REST_FRAMEWORK = {
@@ -101,3 +145,19 @@ REST_FRAMEWORK = {
 # Allow larger JSON uploads for base64 images (increase from default ~2.5MB)
 # Safe for development; consider tuning in production or using multipart uploads.
 DATA_UPLOAD_MAX_MEMORY_SIZE = 10 * 1024 * 1024  # 10 MB
+
+# Email (Support contact)
+EMAIL_HOST = os.environ.get('EMAIL_HOST', '')
+EMAIL_PORT = int(os.environ.get('EMAIL_PORT', '587'))
+EMAIL_HOST_USER = os.environ.get('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = _env_bool('EMAIL_USE_TLS', True)
+EMAIL_USE_SSL = _env_bool('EMAIL_USE_SSL', False)
+DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', EMAIL_HOST_USER or 'no-reply@torimo-app.com')
+SUPPORT_INBOX_EMAIL = os.environ.get('SUPPORT_INBOX_EMAIL', '')
+
+if EMAIL_HOST:
+    EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+else:
+    # Fallback for local dev: emails are printed to console
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'

@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import ErrorBoundary from './ErrorBoundary'
+import { AuthProvider } from './hooks/useAuth'
 
 import './index.css'
 // Global styles for form controls and shared components
@@ -16,7 +17,9 @@ if (rootElement) {
   createRoot(rootElement).render(
     <React.StrictMode>
       <ErrorBoundary>
-        <App />
+        <AuthProvider>
+          <App />
+        </AuthProvider>
       </ErrorBoundary>
     </React.StrictMode>
   )

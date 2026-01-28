@@ -1,22 +1,24 @@
-from rest_framework import viewsets
-from rest_framework.decorators import api_view
+from rest_framework import status, viewsets, exceptions, serializers
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from rest_framework import status
-from .models import Exercise, Meal, DailyLog
-from .serializers import ExerciseSerializer, MealSerializer, DailyLogSerializer
 import os
 import re
 import csv
 import difflib
 from pathlib import Path
-    # Restore the canonicalize_name function
-    # This function was accidentally modified and needs to be restored to its original state.
-
 import requests
 import json
 from datetime import datetime
 import base64
 from dotenv import load_dotenv
+from django.conf import settings
+from django.core.mail import EmailMessage
+from torimo.middleware.supabase_auth import (
+    require_supabase_auth,
+    ensure_supabase_user,
+    SupabaseTokenError,
+)
 
 # Ensure .env is loaded even if settings.py hasn't loaded it yet (defensive)
 try:
@@ -24,32 +26,436 @@ try:
 except Exception:
     pass
 
+SUPABASE_URL = (os.environ.get('SUPABASE_URL') or '').rstrip('/')
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get('SUPABASE_SERVICE_ROLE_KEY') or os.environ.get('SUPABASE_SERVICE_KEY')
+SUPABASE_ANON_KEY = os.environ.get('SUPABASE_ANON_KEY') or os.environ.get('SUPABASE_PUBLIC_ANON_KEY')
+SUPABASE_REST_URL = f"{SUPABASE_URL}/rest/v1" if SUPABASE_URL else ''
+NOTES_TABLE = os.environ.get('SUPABASE_NOTES_TABLE', 'notes')
+MEALS_TABLE = os.environ.get('SUPABASE_MEALS_TABLE', 'meals')
+EXERCISES_TABLE = os.environ.get('SUPABASE_EXERCISES_TABLE', 'exercises')
+DAILY_LOGS_TABLE = os.environ.get('SUPABASE_DAILY_LOGS_TABLE', 'daily_logs')
+PROFILES_TABLE = os.environ.get('SUPABASE_PROFILES_TABLE', 'profiles')
+SUPPORT_INBOX_EMAIL = os.environ.get('SUPPORT_INBOX_EMAIL') or os.environ.get('ADMIN_EMAIL')
 
-class ExerciseViewSet(viewsets.ModelViewSet):
-    queryset = Exercise.objects.all()
-    serializer_class = ExerciseSerializer
+# Cache whether the Supabase meals table has a dedicated `barcode` column.
+# Some deployments may still be on an older schema, so we fall back gracefully.
+_BARCODE_COLUMN_AVAILABLE = True
 
 
-class MealViewSet(viewsets.ModelViewSet):
-    serializer_class = MealSerializer
-    # Add explicit queryset so DRF router can auto-generate basename and avoid AssertionError
-    queryset = Meal.objects.all()
+class BarcodeMealSerializer(serializers.Serializer):
+    barcode = serializers.CharField(max_length=64)
+    name = serializers.CharField(max_length=255)
+    calories = serializers.IntegerField(min_value=0)
+    protein = serializers.DecimalField(max_digits=7, decimal_places=2)
+    fat = serializers.DecimalField(max_digits=7, decimal_places=2)
+    carbs = serializers.DecimalField(max_digits=7, decimal_places=2)
+    category = serializers.ChoiceField(['breakfast', 'lunch', 'dinner', 'snack'])
+    consumed_at = serializers.DateField()
+    serving_grams = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
 
-    def get_queryset(self):
-        qs = Meal.objects.all().order_by('-consumed_at', '-id')
-        date_param = self.request.query_params.get('date')
+    def validate(self, attrs):
+        protein = float(attrs['protein'])
+        fat = float(attrs['fat'])
+        carbs = float(attrs['carbs'])
+        if attrs['calories'] == 0:
+            attrs['calories'] = int(round(protein * 4 + carbs * 4 + fat * 9))
+        return attrs
+
+
+class ContactSupportSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=120)
+    email = serializers.EmailField(max_length=254)
+    category = serializers.ChoiceField(
+        ['general', 'technical', 'billing', 'feature', 'bug', 'other'],
+        required=False,
+        default='general',
+    )
+    subject = serializers.CharField(max_length=200, required=False, allow_blank=True)
+    message = serializers.CharField(max_length=4000)
+
+
+def _supabase_table_url(table: str) -> str:
+    if not SUPABASE_REST_URL:
+        raise exceptions.APIException('Supabase REST API is not configured on the server.')
+    return f"{SUPABASE_REST_URL}/{table}"
+
+
+def _supabase_error(resp):
+    try:
+        payload = resp.json()
+    except Exception:
+        payload = None
+    if isinstance(payload, dict):
+        return payload.get('message') or payload.get('details') or payload.get('error') or payload.get('detail') or resp.text
+    if isinstance(payload, list) and payload:
+        first = payload[0]
+        if isinstance(first, dict):
+            return first.get('message') or first.get('details') or resp.text
+    return resp.text or 'Supabase REST API error'
+
+
+def _build_service_headers(prefer: str | None = None) -> dict:
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        raise exceptions.APIException('Supabase service role key is not configured.')
+    headers = {
+        'Authorization': f'Bearer {SUPABASE_SERVICE_ROLE_KEY}',
+        'apikey': SUPABASE_SERVICE_ROLE_KEY,
+        'Content-Type': 'application/json',
+    }
+    if prefer:
+        headers['Prefer'] = prefer
+    return headers
+
+
+def _build_user_headers(request, prefer: str | None = None) -> dict:
+    try:
+        ensure_supabase_user(request)
+    except SupabaseTokenError as exc:
+        raise exceptions.AuthenticationFailed(str(exc))
+
+    token = getattr(request, 'supabase_token', None)
+    api_key = SUPABASE_ANON_KEY or SUPABASE_SERVICE_ROLE_KEY
+    if not token:
+        raise exceptions.AuthenticationFailed('Supabase JWT is required.')
+    if not api_key:
+        raise exceptions.APIException('Supabase API key is not configured.')
+
+    headers = {
+        'Authorization': f'Bearer {token}',
+        'apikey': api_key,
+        'Content-Type': 'application/json',
+    }
+    if prefer:
+        headers['Prefer'] = prefer
+    return headers
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def contact_support(request):
+    serializer = ContactSupportSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    data = serializer.validated_data
+
+    inbox = (
+        SUPPORT_INBOX_EMAIL
+        or getattr(settings, 'SUPPORT_INBOX_EMAIL', None)
+        or getattr(settings, 'DEFAULT_FROM_EMAIL', None)
+        or getattr(settings, 'EMAIL_HOST_USER', None)
+    )
+    if not inbox:
+        return Response(
+            {'detail': 'Support inbox email is not configured.'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+
+    subject = data.get('subject') or 'お問い合わせ'
+    category = data.get('category') or 'general'
+    message = data.get('message')
+    name = data.get('name')
+    email = data.get('email')
+
+    body = (
+        f"カテゴリー: {category}\n"
+        f"お名前: {name}\n"
+        f"メール: {email}\n\n"
+        f"内容:\n{message}\n"
+    )
+
+    try:
+        message = EmailMessage(
+            subject=f"[TORIMO お問い合わせ] {subject}",
+            body=body,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None) or email,
+            to=[inbox],
+            reply_to=[email],
+        )
+        message.send(fail_silently=False)
+    except Exception as exc:
+        return Response(
+            {'detail': f'Failed to send support email: {exc}'},
+            status=status.HTTP_502_BAD_GATEWAY,
+        )
+
+    return Response({'ok': True}, status=status.HTTP_201_CREATED)
+
+
+class SupabaseProxyViewSet(viewsets.ViewSet):
+    table_name: str = ''
+    order_column: str | None = 'created_at'
+
+    def _table_url(self):
+        if not self.table_name:
+            raise exceptions.APIException('table_name is not configured for this viewset.')
+        return _supabase_table_url(self.table_name)
+
+    def build_list_params(self, request):
+        params = {'select': '*'}
+        if self.order_column:
+            params['order'] = f'{self.order_column}.desc'
+        return params
+
+    def prepare_payload(self, request, payload, create=False):
+        data = dict(payload or {})
+        user_id = getattr(request, 'supabase_user_id', None)
+        if create:
+            data.setdefault('user_id', user_id)
+        return data
+
+    def list(self, request):
+        if not getattr(request, 'supabase_user_id', None):
+            auth_error = getattr(request, 'supabase_auth_error', None)
+            token_seen = getattr(request, '_supabase_auth_middleware_seen_token', None)
+            detail = auth_error or 'Supabase authentication required.'
+            detail = f"{detail} (token_seen={token_seen})"
+            raise exceptions.AuthenticationFailed(detail)
+        headers = _build_user_headers(request)
+        params = self.build_list_params(request)
+        try:
+            resp = requests.get(self._table_url(), headers=headers, params=params, timeout=8)
+        except requests.RequestException:
+            raise exceptions.APIException('Failed to reach Supabase REST API.')
+
+        if resp.status_code != 200:
+            raise exceptions.APIException(_supabase_error(resp))
+        return Response(resp.json())
+
+    def retrieve(self, request, pk=None):
+        if not getattr(request, 'supabase_user_id', None):
+            auth_error = getattr(request, 'supabase_auth_error', None)
+            token_seen = getattr(request, '_supabase_auth_middleware_seen_token', None)
+            detail = auth_error or 'Supabase authentication required.'
+            detail = f"{detail} (token_seen={token_seen})"
+            raise exceptions.AuthenticationFailed(detail)
+        headers = _build_user_headers(request)
+        params = {'select': '*', 'id': f'eq.{pk}', 'limit': '1'}
+        try:
+            resp = requests.get(self._table_url(), headers=headers, params=params, timeout=8)
+        except requests.RequestException:
+            raise exceptions.APIException('Failed to reach Supabase REST API.')
+
+        if resp.status_code != 200:
+            raise exceptions.APIException(_supabase_error(resp))
+        rows = resp.json() or []
+        if not rows:
+            raise exceptions.NotFound('Record not found.')
+        return Response(rows[0])
+
+    def create(self, request):
+        if not getattr(request, 'supabase_user_id', None):
+            auth_error = getattr(request, 'supabase_auth_error', None)
+            token_seen = getattr(request, '_supabase_auth_middleware_seen_token', None)
+            detail = auth_error or 'Supabase authentication required.'
+            detail = f"{detail} (token_seen={token_seen})"
+            raise exceptions.AuthenticationFailed(detail)
+        headers = _build_user_headers(request, 'return=representation')
+        payload = self.prepare_payload(request, request.data, create=True)
+        try:
+            resp = requests.post(self._table_url(), headers=headers, json=[payload], timeout=8)
+        except requests.RequestException:
+            raise exceptions.APIException('Failed to reach Supabase REST API.')
+
+        if resp.status_code not in (200, 201):
+            raise exceptions.APIException(_supabase_error(resp))
+        rows = resp.json() or []
+        return Response(rows[0] if rows else payload, status=status.HTTP_201_CREATED)
+
+    def partial_update(self, request, pk=None):
+        if not getattr(request, 'supabase_user_id', None):
+            auth_error = getattr(request, 'supabase_auth_error', None)
+            token_seen = getattr(request, '_supabase_auth_middleware_seen_token', None)
+            detail = auth_error or 'Supabase authentication required.'
+            detail = f"{detail} (token_seen={token_seen})"
+            raise exceptions.AuthenticationFailed(detail)
+        headers = _build_user_headers(request, 'return=representation')
+        payload = self.prepare_payload(request, request.data)
+        params = {'id': f'eq.{pk}'}
+        try:
+            resp = requests.patch(self._table_url(), headers=headers, params=params, json=payload, timeout=8)
+        except requests.RequestException:
+            raise exceptions.APIException('Failed to reach Supabase REST API.')
+
+        if resp.status_code not in (200, 204):
+            raise exceptions.APIException(_supabase_error(resp))
+        if resp.status_code == 204 or not resp.content:
+            return Response(status=status.HTTP_200_OK)
+        rows = resp.json() or []
+        return Response(rows[0] if rows else payload)
+
+    def destroy(self, request, pk=None):
+        if not getattr(request, 'supabase_user_id', None):
+            auth_error = getattr(request, 'supabase_auth_error', None)
+            raise exceptions.AuthenticationFailed(auth_error or 'Supabase authentication required.')
+        headers = _build_user_headers(request)
+        params = {'id': f'eq.{pk}'}
+        try:
+            resp = requests.delete(self._table_url(), headers=headers, params=params, timeout=8)
+        except requests.RequestException:
+            raise exceptions.APIException('Failed to reach Supabase REST API.')
+
+        if resp.status_code not in (200, 204):
+            raise exceptions.APIException(_supabase_error(resp))
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class ExerciseViewSet(SupabaseProxyViewSet):
+    table_name = EXERCISES_TABLE
+    order_column = 'performed_at'
+
+
+class MealViewSet(SupabaseProxyViewSet):
+    table_name = MEALS_TABLE
+    order_column = 'consumed_at'
+
+    def build_list_params(self, request):
+        params = super().build_list_params(request)
+        date_param = request.query_params.get('date')
         if date_param:
+            params['consumed_at'] = f'eq.{date_param}'
+        return params
+
+
+class DailyLogViewSet(SupabaseProxyViewSet):
+    table_name = DAILY_LOGS_TABLE
+    order_column = 'log_date'
+
+
+@api_view(['POST'])
+@require_supabase_auth
+def barcode_meal_create(request):
+    global _BARCODE_COLUMN_AVAILABLE
+    serializer = BarcodeMealSerializer(data=request.data)
+    serializer.is_valid(raise_exception=True)
+    supabase_user_id = getattr(request, 'supabase_user_id', None)
+    if not supabase_user_id:
+        return Response({'detail': 'Supabase authentication is required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    data = serializer.validated_data
+    payload = {
+        'barcode': data['barcode'],
+        'name': data['name'],
+        'calories': int(data['calories']),
+        'protein': float(data['protein']),
+        'fat': float(data['fat']),
+        'carbs': float(data['carbs']),
+        'category': data['category'],
+        'consumed_at': data['consumed_at'].isoformat(),
+        'serving_grams': float(data['serving_grams']) if data.get('serving_grams') is not None else None,
+        'source': 'barcode',
+        'user_id': supabase_user_id,
+    }
+    if payload['serving_grams'] is None:
+        payload.pop('serving_grams')
+
+    headers = _build_user_headers(request, 'return=representation')
+
+    def _post(payload_override):
+        try:
+            return requests.post(
+                _supabase_table_url(MEALS_TABLE),
+                headers=headers,
+                json=[payload_override],
+                timeout=8,
+            )
+        except requests.RequestException:
+            raise exceptions.APIException('Supabase REST API との通信に失敗しました')
+
+    attempt_payload = dict(payload)
+    if not _BARCODE_COLUMN_AVAILABLE:
+        attempt_payload.pop('barcode', None)
+
+    try:
+        resp = _post(attempt_payload)
+    except exceptions.APIException as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if resp.status_code not in (200, 201):
+        error_detail = _supabase_error(resp)
+        lower_detail = (error_detail or '').lower()
+        if _BARCODE_COLUMN_AVAILABLE and 'barcode' in lower_detail and 'column' in lower_detail:
+            _BARCODE_COLUMN_AVAILABLE = False
+            attempt_payload.pop('barcode', None)
             try:
-                parsed = datetime.strptime(date_param, '%Y-%m-%d').date()
-            except ValueError:
-                return qs.none()
-            qs = qs.filter(consumed_at=parsed)
-        return qs
+                resp = _post(attempt_payload)
+            except exceptions.APIException as exc:
+                return Response({'detail': str(exc)}, status=status.HTTP_502_BAD_GATEWAY)
+            if resp.status_code not in (200, 201):
+                return Response({'detail': _supabase_error(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+        else:
+            return Response({'detail': error_detail}, status=status.HTTP_502_BAD_GATEWAY)
+
+    rows = resp.json() or []
+    return Response(rows[0] if rows else payload, status=status.HTTP_201_CREATED)
 
 
-class DailyLogViewSet(viewsets.ModelViewSet):
-    queryset = DailyLog.objects.all()
-    serializer_class = DailyLogSerializer
+@api_view(['GET', 'POST'])
+@require_supabase_auth
+def user_profile_view(request):
+    supabase_user_id = getattr(request, 'supabase_user_id', None)
+    if not supabase_user_id:
+        return Response({'detail': 'Supabase authentication is required.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    if request.method == 'GET':
+        params = {'select': '*', 'supabase_user_id': f'eq.{supabase_user_id}', 'limit': '1'}
+        try:
+            resp = requests.get(
+                _supabase_table_url(PROFILES_TABLE),
+                headers=_build_user_headers(request),
+                params=params,
+                timeout=8,
+            )
+        except requests.RequestException:
+            return Response({'detail': 'Supabase REST API との通信に失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if resp.status_code != 200:
+            return Response({'detail': _supabase_error(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+        rows = resp.json() or []
+        if not rows:
+            return Response({'detail': 'Profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response({'profile': rows[0]})
+
+    data = request.data or {}
+
+    def num_or_none(value, cast=float):
+        if value in (None, ''):
+            return None
+        try:
+            return cast(value)
+        except Exception:
+            return None
+
+    payload = {
+        'supabase_user_id': supabase_user_id,
+        'username': (data.get('username') or '').strip() or None,
+        'age': num_or_none(data.get('age'), int),
+        'gender': (data.get('gender') or '').strip() or None,
+        'height_cm': num_or_none(data.get('height_cm')),
+        'current_weight_kg': num_or_none(data.get('current_weight_kg')),
+        'target_weight_kg': num_or_none(data.get('target_weight_kg')),
+        'goal': (data.get('goal') or '').strip() or None,
+        'activity_level': (data.get('activity_level') or '').strip() or None,
+        'agreed_to_terms': bool(data.get('agreed_to_terms')),
+    }
+
+    payload = {k: v for k, v in payload.items() if v is not None}
+
+    try:
+        resp = requests.post(
+            _supabase_table_url(PROFILES_TABLE),
+            headers=_build_user_headers(request, 'return=representation,resolution=merge-duplicates'),
+            params={'on_conflict': 'supabase_user_id'},
+            json=[payload],
+            timeout=8,
+        )
+    except requests.RequestException:
+        return Response({'detail': 'Supabase REST API との通信に失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if resp.status_code not in (200, 201):
+        return Response({'detail': _supabase_error(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    rows = resp.json() or []
+    created = resp.status_code == 201
+    return Response({'created': created, 'profile': rows[0] if rows else payload}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 # ---------------- Nutrition Analysis (text-based) -----------------
@@ -405,6 +811,97 @@ def ai_profile_chat(messages: list[dict], profile: dict) -> str:
     return content or "回答生成に失敗しました。後で再度お試しください。"
 
 
+# ---------------- Supabase-protected Notes API -----------------
+
+
+def _notes_endpoint() -> str:
+    return _supabase_table_url(NOTES_TABLE)
+
+
+def _notes_error_response(resp):
+    try:
+        data = resp.json()
+    except Exception:
+        data = {'detail': resp.text or 'Supabase REST API error'}
+    return data.get('detail') or data
+
+
+@api_view(['GET', 'POST'])
+@require_supabase_auth
+def notes_collection(request):
+    user_id = request.supabase_user_id
+    if request.method == 'GET':
+        try:
+            resp = requests.get(
+                _notes_endpoint(),
+                headers=_build_user_headers(request),
+                params={
+                    'select': 'id,title,body,created_at',
+                    'order': 'created_at.desc',
+                },
+                timeout=6,
+            )
+        except RuntimeError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        except requests.RequestException:
+            return Response({'detail': 'Supabase REST API との通信に失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+        if resp.status_code != 200:
+            return Response({'detail': _notes_error_response(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+        return Response({'notes': resp.json()})
+
+    title = (request.data or {}).get('title', '').strip()
+    body = (request.data or {}).get('body', '').strip()
+    if not title:
+        return Response({'detail': 'title は必須です'}, status=status.HTTP_400_BAD_REQUEST)
+
+    note_payload = {
+        'title': title,
+        'body': body,
+        'user_id': user_id,
+    }
+    try:
+        resp = requests.post(
+            _notes_endpoint(),
+            headers=_build_user_headers(request, 'return=representation'),
+            json=[note_payload],
+            timeout=6,
+        )
+    except RuntimeError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except requests.RequestException:
+        return Response({'detail': 'Supabase REST API との通信に失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if resp.status_code not in (200, 201):
+        return Response({'detail': _notes_error_response(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+
+    rows = resp.json() or []
+    note = rows[0] if rows else note_payload
+    return Response({'note': note}, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+@require_supabase_auth
+def note_detail(request, note_id: str):
+    try:
+        resp = requests.delete(
+            _notes_endpoint(),
+            headers=_build_user_headers(request),
+            params={
+                'id': f'eq.{note_id}',
+            },
+            timeout=6,
+        )
+    except RuntimeError as exc:
+        return Response({'detail': str(exc)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    except requests.RequestException:
+        return Response({'detail': 'Supabase REST API との通信に失敗しました'}, status=status.HTTP_502_BAD_GATEWAY)
+
+    if resp.status_code not in (200, 204):
+        return Response({'detail': _notes_error_response(resp)}, status=status.HTTP_502_BAD_GATEWAY)
+    return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 def load_csv_dataset():
     global CSV_CACHE, CSV_MATCH_INDEX
     if CSV_CACHE is not None:
@@ -644,6 +1141,14 @@ def load_csv_dataset():
                 custom_text = custom_path.read_text(encoding='cp932')
             add_simple_csv(custom_text, 'custom-csv')
 
+        fruits_path = root / 'data' / 'fruits_generated.csv'
+        if fruits_path.exists():
+            try:
+                fruits_text = fruits_path.read_text(encoding='utf-8-sig')
+            except Exception:
+                fruits_text = fruits_path.read_text(encoding='cp932')
+            add_simple_csv(fruits_text, 'fruits-csv')
+
         rows = list(entries.values())
 
         CSV_CACHE = rows
@@ -793,14 +1298,18 @@ def resolve_food_nutrition(name: str):
 
 def compute_serving_grams(food_name: str, qty, unit, base_info):
     # unit -> grams
-    if qty is None and (not unit):
-        # default 100g or 1 unit
+    if qty is None:
+        qty = 1.0
+
+    # direct gram/milliliter input should scale per 100g entries exactly
+    if unit in UNIT_GRAMS:
+        return qty * UNIT_GRAMS[unit]
+
+    # If unit is missing, default to per-unit when available, else 100g
+    if not unit:
         if base_info.get('per_unit'):
-            return base_info['per_unit']['grams']
+            return float(base_info['per_unit'].get('grams') or 100.0)
         return 100.0
-        # direct gram/milliliter input should scale per 100g entries exactly
-        if unit in UNIT_GRAMS:
-            return qty * UNIT_GRAMS[unit]
     if unit in GENERIC_UNITS:
         return qty * GENERIC_UNITS[unit]
     # piece-based
@@ -1048,7 +1557,13 @@ def analyze_nutrition_image(request):
             totals[k] = round(totals[k], 1 if k != 'calories' else 0)
         return Response({'items': out, 'totals': totals, 'provider': 'gemini'}, status=200)
     except Exception as e:
-        return Response({'error': f'vision_failed: {e}'}, status=500)
+        try:
+            from django.conf import settings as _settings
+            if getattr(_settings, 'DEBUG', False):
+                return Response({'error': f'vision_failed: {e}'}, status=500)
+        except Exception:
+            pass
+        return Response({'error': 'vision_failed'}, status=500)
 
 
 @api_view(['GET'])
@@ -1113,6 +1628,20 @@ def assistant_chat(request):
 @api_view(['GET'])
 def assistant_status(request):
     """Lightweight health check for Gemini integration only."""
+    # Avoid leaking environment paths/keys in non-debug deployments.
+    try:
+        from django.conf import settings as _settings
+        if not getattr(_settings, 'DEBUG', False):
+            gemini_import = True
+            try:
+                import google.generativeai as _genai  # type: ignore
+                _ = _genai
+            except Exception:
+                gemini_import = False
+            return Response({'gemini_ready': bool(os.environ.get('GOOGLE_API_KEY')) and gemini_import}, status=200)
+    except Exception:
+        pass
+
     # Ensure .env is loaded (non-destructive)
     try:
         load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / '.env')
